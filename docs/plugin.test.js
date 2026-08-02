@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const pluginSource = fs.readFileSync(__dirname + '/VibePlayer-Lampa-Plugin.js', 'utf8');
+const loaderSource = fs.readFileSync(__dirname + '/v.js', 'utf8');
 const logs = [];
 let forwardedPayload;
 
@@ -81,14 +82,39 @@ assert(labels.some((label) => label.startsWith('@VIBEVOICE@Dub|720p')));
 assert(labels.some((label) => label.startsWith('@VIBEEPISODE@1|2|94|122|Second%20Episode|1080p')));
 assert.equal(forwarded.headers.Cookie, 'source-provided-cookie');
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(forwarded.headers.Referer, undefined);
-assert.equal(forwarded.headers.Origin, undefined);
-assert.equal(forwarded.headers['User-Agent'], undefined);
-assert.equal(context.window.VibePlayerBridge.version, '0.5.0');
+assert.equal(forwarded.headers.Accept, '*/*');
+assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
+assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
+assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
+assert.equal(context.window.VibePlayerBridge.version, '0.6.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
+assert.equal(context.window.VibePlayerBridge.lastStats.headers, 6);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.6.0'));
+
+forwardedPayload = null;
+assert.equal(
+    context.Lampa.Android.openPlayer(
+        'https://media.example/override.m3u8',
+        JSON.stringify({
+            url: 'https://media.example/override.m3u8',
+            headers: {
+                Origin: 'https://source.example',
+                Referer: 'https://source.example/watch',
+                'User-Agent': 'Source Agent',
+                Accept: 'application/vnd.apple.mpegurl'
+            }
+        })
+    ),
+    'forwarded'
+);
+const overridden = JSON.parse(forwardedPayload);
+assert.equal(overridden.headers.Origin, 'https://source.example');
+assert.equal(overridden.headers.Referer, 'https://source.example/watch');
+assert.equal(overridden.headers['User-Agent'], 'Source Agent');
+assert.equal(overridden.headers.Accept, 'application/vnd.apple.mpegurl');
 
 console.log('plugin bridge tests passed');

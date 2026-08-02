@@ -34,7 +34,9 @@ Install the short GitHub Pages URL in Lampa:
 https://funk4d.github.io/VibePlayer/v.js
 ```
 
-The bridge is passive: it observes the playback object already produced by `Lampa.Player.play` and forwards its URL, variants, playlist metadata, and source-provided headers to VibePlayer. It does not probe media URLs, call MODS APIs, proxy streams, or synthesize authorization headers.
+The bridge is passive: it observes the playback object already produced by `Lampa.Player.play` and forwards its URL, variants, playlist metadata, and source-provided headers to VibePlayer. Because an external Android player does not inherit the WebView request context, the bridge also passes the current Lampa `Origin`, cross-origin `Referer`, WebView `User-Agent`, and `Accept` header through Lampa's standard player Intent. Explicit source headers take precedence.
+
+The bridge does not fetch or probe media URLs, call MODS APIs, proxy streams, retry requests, or create cookies/authentication tokens.
 
 ## Remote
 

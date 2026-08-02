@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.5.0';
+    var BRIDGE_VERSION = '0.6.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -104,6 +104,31 @@
 
     function encodePayload(originalPayload, data) {
         return typeof originalPayload === 'string' ? JSON.stringify(data) : data;
+    }
+
+    function browserContextHeaders() {
+        var origin = window.location && nonEmptyString(window.location.origin);
+        var validOrigin = origin && /^https?:\/\/[^/]+$/i.test(origin) ? origin : null;
+        var userAgent = window.navigator && nonEmptyString(window.navigator.userAgent);
+        var headers = { Accept: '*/*' };
+
+        // These are the request-context headers supplied automatically by the WebView
+        // when Lampa's built-in hls.js player fetches a cross-origin stream. An external
+        // player is a separate process, so Lampa must carry the same context in its Intent.
+        if (validOrigin) {
+            headers.Origin = validOrigin;
+            headers.Referer = validOrigin + '/';
+        }
+        if (userAgent) headers['User-Agent'] = userAgent;
+        return headers;
+    }
+
+    function addPlaybackHeaders(data) {
+        var sourceHeaders = data.headers && typeof data.headers === 'object' && !Array.isArray(data.headers)
+            ? data.headers
+            : {};
+        data.headers = Object.assign({}, browserContextHeaders(), sourceHeaders);
+        return Object.keys(data.headers).length;
     }
 
     function captureSummary(value) {
@@ -272,12 +297,14 @@
         var stats = {
             metadata: 0,
             captured: false,
+            headers: 0,
             voiceovers: { total: 0, serialized: 0 },
             episodes: { total: 0, serialized: 0 }
         };
         try {
             if (data) {
                 stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
+                stats.headers = addPlaybackHeaders(data);
                 stats.metadata = serializeMetadata(link, data);
                 stats.voiceovers = serializeVoiceovers(data);
                 stats.episodes = serializeEpisodes(data);
@@ -299,6 +326,7 @@
         lastStats: {
             metadata: 0,
             captured: false,
+            headers: 0,
             voiceovers: { total: 0, serialized: 0 },
             episodes: { total: 0, serialized: 0 }
         },
