@@ -338,7 +338,8 @@ class PlaybackActivity : Activity() {
                     "bridge=[title=${activeRequest.title != null} source=${activeRequest.sourceName != null} " +
                     "episodes=${variants.count { it.episode != null }} " +
                     "voiceovers=${variants.mapNotNull { it.voiceoverLabel }.distinct().size} " +
-                    "reserves=${activeRequest.reserveUrls.size}]",
+                    "reserves=${activeRequest.reserveUrls.size} " +
+                    "capture=${activeRequest.bridgeProbe ?: "none"}]",
             )
         }
     }

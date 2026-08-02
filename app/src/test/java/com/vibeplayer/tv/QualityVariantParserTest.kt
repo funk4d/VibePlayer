@@ -66,11 +66,22 @@ class QualityVariantParserTest {
     @Test
     fun decodesMetadataBridgeLabel() {
         val parsed = QualityVariantParser.parseMetadataLabel(
-            "@VIBEMETA@The%20Series|Alloha",
+            "@VIBEMETA@The%20Series|Alloha|c1p12v3f18",
         )
 
         assertEquals("The Series", parsed?.title)
         assertEquals("Alloha", parsed?.source)
-        assertEquals(null, QualityVariantParser.parseLabel("@VIBEMETA@The%20Series|Alloha"))
+        assertEquals("c1p12v3f18", parsed?.probe)
+        assertEquals(null, QualityVariantParser.parseLabel("@VIBEMETA@The%20Series|Alloha|c1p12v3f18"))
+    }
+
+    @Test
+    fun keepsReadingOlderMetadataLabelsAndRejectsJunkProbes() {
+        assertEquals("Alloha", QualityVariantParser.parseMetadataLabel("@VIBEMETA@The%20Series|Alloha")?.source)
+        assertEquals(null, QualityVariantParser.parseMetadataLabel("@VIBEMETA@The%20Series|Alloha")?.probe)
+        assertEquals(
+            null,
+            QualityVariantParser.parseMetadataLabel("@VIBEMETA@x|y|https://media.example/leak.m3u8")?.probe,
+        )
     }
 }

@@ -19,6 +19,7 @@ internal data class PlaybackRequest(
     val startPositionMs: Long,
     val qualityVariants: List<QualityVariant>,
     val reserveUrls: List<String> = emptyList(),
+    val bridgeProbe: String? = null,
 ) {
     val safeLocation: String
         get() = LocationRedactor.redact(uri.toString())
@@ -64,6 +65,7 @@ internal data class PlaybackRequest(
                     ?: 0L,
                 qualityVariants = QualityVariantParser.fromIntent(intent),
                 reserveUrls = QualityVariantParser.reservesFromIntent(intent),
+                bridgeProbe = bridgeMetadata?.probe,
             )
         }
 
@@ -122,6 +124,8 @@ internal data class EpisodeVariantInfo(
 internal data class BridgeMetadata(
     val title: String?,
     val source: String?,
+    /** Opaque structural summary of the bridge's capture, for logs only. */
+    val probe: String? = null,
 )
 
 internal object QualityVariantParser {
@@ -223,12 +227,13 @@ internal object QualityVariantParser {
     internal fun parseMetadataLabel(rawLabel: String): BridgeMetadata? {
         val trimmed = rawLabel.trim()
         if (!trimmed.startsWith(METADATA_PREFIX)) return null
-        val parts = trimmed.removePrefix(METADATA_PREFIX).split('|', limit = 2)
-        if (parts.size != 2) return null
+        val parts = trimmed.removePrefix(METADATA_PREFIX).split('|', limit = 3)
+        if (parts.size < 2) return null
         return runCatching {
             val title = URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
             val source = URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
-            BridgeMetadata(title, source).takeIf { it.title != null || it.source != null }
+            val probe = parts.getOrNull(2)?.trim()?.takeIf { it.matches(PROBE_FORMAT) }
+            BridgeMetadata(title, source, probe).takeIf { it.title != null || it.source != null || probe != null }
         }.getOrNull()
     }
 
@@ -283,6 +288,9 @@ internal object QualityVariantParser {
     private const val EPISODE_PREFIX = "@VIBEEPISODE@"
     private const val METADATA_PREFIX = "@VIBEMETA@"
     private const val RESERVE_PREFIX = "@VIBERESERVE@"
+
+    /** Structural counters only, so nothing from a stream URL can reach a log through here. */
+    private val PROBE_FORMAT = Regex("c[01]p\\d{1,4}v\\d{1,4}f\\d{1,4}")
 }
 
 internal object LocationRedactor {

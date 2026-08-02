@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.9.0';
+    var BRIDGE_VERSION = '0.10.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -60,28 +60,44 @@
             data && data.source_name,
             data && data.provider_name,
             data && data.balancer_name,
+            // Lampa and its online plugins transliterate this one, so both spellings exist
+            // in the wild and the English-only list quietly matched neither.
+            data && data.balanser_name,
             data && data.source,
             data && data.provider,
             data && data.balancer,
+            data && data.balanser,
             data && data.online
         ]);
     }
 
-    function metadataLabel(title, source) {
-        return METADATA_PREFIX + encodeURIComponent(title || '') + '|' + encodeURIComponent(source || '');
+    function metadataLabel(title, source, probe) {
+        return METADATA_PREFIX + encodeURIComponent(title || '') + '|' +
+            encodeURIComponent(source || '') + '|' + probe;
     }
 
-    function serializeMetadata(link, data) {
+    // A compact, URL-free description of what the capture actually held: matched, playlist
+    // entries, voiceovers, top-level fields. The WebView console is not visible over ADB, so
+    // this is how the bridge's own view of the payload reaches a device log at all.
+    function captureProbe(matched) {
+        var summary = window.VibePlayerBridge.lastCapture;
+        return 'c' + (matched ? 1 : 0) +
+            'p' + summary.playlistCount +
+            'v' + summary.voiceoverCount +
+            'f' + summary.fields.length;
+    }
+
+    function serializeMetadata(link, data, matched) {
         var title = contentTitle(data);
         var source = sourceName(data);
         var url = streamUrl(link) || streamUrl(data);
-        if ((!title && !source) || !url) return 0;
+        if (!url) return 0;
 
         var qualities = Object.assign({}, data.quality || {});
         Object.keys(qualities).forEach(function (label) {
             if (label.indexOf(METADATA_PREFIX) === 0) delete qualities[label];
         });
-        qualities[metadataLabel(title, source)] = url;
+        qualities[metadataLabel(title, source, captureProbe(matched))] = url;
         data.quality = qualities;
         return 1;
     }
@@ -423,7 +439,7 @@
                     stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
                     stats.headers = addPlaybackHeaders(data);
                     stats.reserves = serializeReserves(link, data);
-                    stats.metadata = serializeMetadata(link, data);
+                    stats.metadata = serializeMetadata(link, data, stats.captured);
                     stats.voiceovers = serializeVoiceovers(data);
                     stats.episodes = serializeEpisodes(data);
                 }
