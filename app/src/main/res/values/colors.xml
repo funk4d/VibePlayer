@@ -1,0 +1,7 @@
+<resources>
+    <color name="black">#000000</color>
+    <color name="vibe_accent">#8B5CF6</color>
+    <color name="status_background">#B3000000</color>
+    <color name="controls_background">#E0121218</color>
+    <color name="status_text">#FFFFFFFF</color>
+</resources>

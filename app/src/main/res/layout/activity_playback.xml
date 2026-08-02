@@ -1,0 +1,324 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:keepScreenOn="true">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/black"
+        app:resize_mode="fit"
+        app:show_buffering="always"
+        app:use_controller="false" />
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/software_player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/black"
+        android:visibility="gone"
+        app:resize_mode="fit"
+        app:show_buffering="always"
+        app:surface_type="video_decoder_gl_surface_view"
+        app:use_controller="false" />
+
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="28dp"
+        android:background="@color/status_background"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="12dp"
+        android:textColor="@color/status_text"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/playback_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="20dp"
+        android:maxWidth="250dp"
+        android:lineSpacingExtra="4dp"
+        android:textColor="@color/status_text"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/playback_title_group"
+        android:layout_width="360dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="20dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/playback_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:textColor="@color/status_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/playback_source"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:textColor="@color/status_text"
+            android:textSize="14sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/series_controls"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="14dp"
+        android:layout_marginEnd="24dp"
+        android:gravity="end"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="horizontal"
+            android:padding="6dp">
+
+            <TextView
+                android:id="@+id/season_button"
+                style="@style/VibePlayer.SeriesSelector"
+                android:contentDescription="@string/season"
+                android:text="Season 1  ▾" />
+
+            <TextView
+                android:id="@+id/episode_button"
+                style="@style/VibePlayer.SeriesSelector"
+                android:layout_marginStart="6dp"
+                android:contentDescription="@string/episode"
+                android:text="Episode 1  ▾" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/episode_title_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxWidth="320dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/status_text"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/seek_feedback"
+        android:layout_width="90dp"
+        android:layout_height="90dp"
+        android:layout_gravity="center"
+        android:background="@drawable/focus_gradient"
+        android:gravity="center"
+        android:textColor="@color/status_text"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <FrameLayout
+        android:id="@+id/controls_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/player_controls_background"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/playback_controls_row"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="54dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageButton
+                    android:id="@+id/seek_back_button"
+                    style="@style/VibePlayer.PlaybackIconButton"
+                    android:contentDescription="@string/seek_back"
+                    android:nextFocusDown="@id/time_seek_bar"
+                    android:src="@drawable/player_rewind" />
+            </LinearLayout>
+
+            <Space
+                android:layout_width="26dp"
+                android:layout_height="1dp" />
+
+            <ImageButton
+                android:id="@+id/play_pause_button"
+                style="@style/VibePlayer.PlayPauseButton"
+                android:contentDescription="@string/pause"
+                android:nextFocusDown="@id/time_seek_bar"
+                android:src="@drawable/player_pause" />
+
+            <Space
+                android:layout_width="26dp"
+                android:layout_height="1dp" />
+
+            <LinearLayout
+                android:layout_width="54dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ImageButton
+                    android:id="@+id/seek_forward_button"
+                    style="@style/VibePlayer.PlaybackIconButton"
+                    android:contentDescription="@string/seek_forward"
+                    android:nextFocusDown="@id/time_seek_bar"
+                    android:src="@drawable/player_forward" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical"
+            android:paddingStart="21dp"
+            android:paddingEnd="21dp"
+            android:paddingBottom="14dp">
+
+            <com.vibeplayer.tv.TimelineSeekBar
+                android:id="@+id/time_seek_bar"
+                android:layout_width="match_parent"
+                android:layout_height="28dp"
+                android:focusable="true"
+                android:nextFocusUp="@id/play_pause_button"
+                android:nextFocusDown="@id/quality_button"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:paddingTop="0dp"
+                android:paddingBottom="0dp"
+                android:progressTint="@color/status_text"
+                android:splitTrack="false"
+                android:thumb="@android:color/transparent"
+                android:thumbOffset="0dp"
+                android:thumbTint="@null" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:gravity="center_vertical"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/position_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textColor="@color/status_text"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginHorizontal="10dp"
+                    android:text="/"
+                    android:textColor="@color/status_text"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/duration_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textColor="@color/status_text"
+                    android:textSize="13sp" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/quality_button"
+                    style="@style/VibePlayer.QualityBadge"
+                    android:contentDescription="@string/quality"
+                    android:gravity="center"
+                    android:nextFocusUp="@id/time_seek_bar"
+                    android:text="4K"
+                    android:textColor="@color/status_text"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <ImageButton
+                    android:id="@+id/audio_button"
+                    style="@style/VibePlayer.BottomIconButton"
+                    android:layout_marginStart="1dp"
+                    android:contentDescription="@string/audio"
+                    android:nextFocusUp="@id/time_seek_bar"
+                    android:src="@drawable/player_audio" />
+
+                <ImageButton
+                    android:id="@+id/voiceover_button"
+                    style="@style/VibePlayer.BottomIconButton"
+                    android:layout_marginStart="1dp"
+                    android:contentDescription="@string/voiceover"
+                    android:nextFocusUp="@id/time_seek_bar"
+                    android:src="@drawable/player_voiceover"
+                    android:visibility="gone" />
+
+                <ImageButton
+                    android:id="@+id/subtitles_button"
+                    style="@style/VibePlayer.BottomIconButton"
+                    android:layout_marginStart="1dp"
+                    android:contentDescription="@string/subtitles"
+                    android:nextFocusUp="@id/time_seek_bar"
+                    android:src="@drawable/player_subtitles" />
+
+                <ImageButton
+                    android:id="@+id/settings_button"
+                    style="@style/VibePlayer.BottomIconButton"
+                    android:layout_marginStart="1dp"
+                    android:contentDescription="@string/settings"
+                    android:nextFocusUp="@id/time_seek_bar"
+                    android:src="@drawable/player_settings" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+</FrameLayout>
