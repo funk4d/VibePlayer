@@ -11,11 +11,14 @@ import java.nio.charset.StandardCharsets
 internal data class PlaybackRequest(
     val uri: Uri,
     val mimeType: String?,
+    /** True when [mimeType] is a guess from the address, not something the source declared. */
+    val mimeTypeInferred: Boolean,
     val title: String?,
     val sourceName: String?,
     val headers: Map<String, String>,
     val startPositionMs: Long,
     val qualityVariants: List<QualityVariant>,
+    val reserveUrls: List<String> = emptyList(),
 ) {
     val safeLocation: String
         get() = LocationRedactor.redact(uri.toString())
@@ -37,9 +40,12 @@ internal data class PlaybackRequest(
             )
             val bridgeMetadata = QualityVariantParser.metadataFromIntent(intent)
 
+            val declared = declaredMimeType(intent.type)
+
             PlaybackRequest(
                 uri = uri,
-                mimeType = normalizeMimeType(intent.type, uri),
+                mimeType = declared ?: SourceLadder.containerHint(uri.toString()),
+                mimeTypeInferred = declared == null,
                 title = cleanMetadataValue(
                     intent.getStringExtra(Intent.EXTRA_TITLE)
                         ?: intent.getStringExtra("title")
@@ -57,6 +63,7 @@ internal data class PlaybackRequest(
                     ?.coerceAtLeast(0L)
                     ?: 0L,
                 qualityVariants = QualityVariantParser.fromIntent(intent),
+                reserveUrls = QualityVariantParser.reservesFromIntent(intent),
             )
         }
 
@@ -75,16 +82,18 @@ internal data class PlaybackRequest(
             ?.take(MAX_METADATA_LENGTH)
             ?.takeIf(String::isNotEmpty)
 
-        private fun normalizeMimeType(intentType: String?, uri: Uri): String? {
-            return when (intentType?.lowercase()) {
+        /**
+         * The container the caller actually committed to, or `null` when it committed to
+         * nothing. Lampa hands over a wildcard video type, i.e. no container at all, which
+         * leaves the address as the only hint — a guess [SourceLadder] may revise once the
+         * response proves it wrong.
+         */
+        private fun declaredMimeType(intentType: String?): String? {
+            return when (val normalized = intentType?.lowercase()) {
                 "application/vnd.apple.mpegurl", "application/x-mpegurl" -> MimeTypes.APPLICATION_M3U8
                 "application/dash+xml" -> MimeTypes.APPLICATION_MPD
-                null, "video/*" -> when {
-                    uri.toString().substringBefore('?').endsWith(".m3u8", ignoreCase = true) -> MimeTypes.APPLICATION_M3U8
-                    uri.toString().substringBefore('?').endsWith(".mpd", ignoreCase = true) -> MimeTypes.APPLICATION_MPD
-                    else -> null
-                }
-                else -> intentType
+                null, "video/*", "*/*" -> null
+                else -> normalized
             }
         }
 
@@ -117,7 +126,7 @@ internal data class BridgeMetadata(
 
 internal object QualityVariantParser {
     @Suppress("DEPRECATION")
-    fun fromIntent(intent: Intent): List<QualityVariant> {
+    private fun labeledValues(intent: Intent): List<Pair<String, Any?>> {
         val labels = intent.getStringArrayExtra("quality_levels")?.toList().orEmpty()
         val rawUrls = intent.extras?.get("quality_urls")
         val values: List<Any?> = when (rawUrls) {
@@ -130,6 +139,10 @@ internal object QualityVariantParser {
         // its source resolver. Keep values paired with their labels so one bad
         // entry cannot shift every following quality label onto the wrong URL.
         return labels.zip(values)
+    }
+
+    fun fromIntent(intent: Intent): List<QualityVariant> {
+        return labeledValues(intent)
             .mapNotNull { (label, value) ->
                 val uri = uriFromValue(value) ?: return@mapNotNull null
                 val parsedLabel = parseLabel(label) ?: return@mapNotNull null
@@ -146,6 +159,20 @@ internal object QualityVariantParser {
     fun metadataFromIntent(intent: Intent): BridgeMetadata? = intent
         .getStringArrayExtra("quality_levels")
         ?.firstNotNullOfOrNull(::parseMetadataLabel)
+
+    /**
+     * Backup addresses the source shipped next to the chosen one. They are never offered
+     * in the quality menu — they only exist for [SourceLadder] to fall back to.
+     */
+    fun reservesFromIntent(intent: Intent): List<String> = labeledValues(intent)
+        .mapNotNull { (label, value) ->
+            val order = parseReserveLabel(label) ?: return@mapNotNull null
+            val url = uriFromValue(value)?.toString() ?: return@mapNotNull null
+            order to url
+        }
+        .sortedBy { (order, _) -> order }
+        .map { (_, url) -> url }
+        .distinct()
 
     private fun uriFromValue(value: Any?): Uri? {
         val raw = when (value) {
@@ -179,6 +206,7 @@ internal object QualityVariantParser {
     internal fun parseLabel(rawLabel: String): ParsedVariantLabel? {
         val trimmed = rawLabel.trim().takeIf(String::isNotEmpty) ?: return null
         if (trimmed.startsWith(METADATA_PREFIX)) return null
+        if (trimmed.startsWith(RESERVE_PREFIX)) return null
         if (trimmed.startsWith(EPISODE_PREFIX)) return parseEpisodeLabel(trimmed)
         if (!trimmed.startsWith(VOICEOVER_PREFIX)) return ParsedVariantLabel(trimmed)
 
@@ -202,6 +230,16 @@ internal object QualityVariantParser {
             val source = URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
             BridgeMetadata(title, source).takeIf { it.title != null || it.source != null }
         }.getOrNull()
+    }
+
+    /** Returns the position of a reserve address within the source's own ordering. */
+    internal fun parseReserveLabel(rawLabel: String): Int? {
+        val trimmed = rawLabel.trim()
+        if (!trimmed.startsWith(RESERVE_PREFIX)) return null
+        return trimmed.removePrefix(RESERVE_PREFIX)
+            .substringBefore('|')
+            .toIntOrNull()
+            ?.takeIf { it >= 0 }
     }
 
     private fun parseEpisodeLabel(rawLabel: String): ParsedVariantLabel {
@@ -244,6 +282,7 @@ internal object QualityVariantParser {
     private const val VOICEOVER_PREFIX = "@VIBEVOICE@"
     private const val EPISODE_PREFIX = "@VIBEEPISODE@"
     private const val METADATA_PREFIX = "@VIBEMETA@"
+    private const val RESERVE_PREFIX = "@VIBERESERVE@"
 }
 
 internal object LocationRedactor {

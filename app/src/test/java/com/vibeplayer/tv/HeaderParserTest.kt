@@ -6,6 +6,15 @@ import org.junit.Test
 
 class HeaderParserTest {
     @Test
+    fun findsHeadersRegardlessOfHowTheSourceSpelledThem() {
+        val headers = mapOf(" user-agent " to "Lampa WebView", "Referer" to "http://lampa.mx/")
+
+        assertEquals("Lampa WebView", HeaderParser.valueOf(headers, "User-Agent"))
+        assertEquals("http://lampa.mx/", HeaderParser.valueOf(headers, "referer"))
+        assertEquals(null, HeaderParser.valueOf(headers, "Cookie"))
+    }
+
+    @Test
     fun parsesAlternatingNameValueArray() {
         val parsed = HeaderParser.parseRaw(arrayOf("Referer", "https://example.test/", "Cookie", "a=b"))
         assertEquals("https://example.test/", parsed["Referer"])

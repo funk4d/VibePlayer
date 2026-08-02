@@ -86,9 +86,10 @@ Keep the Gradle wrapper in the repository so a clean checkout builds with `./gra
 
 Use one exported playback `Activity`, one layout containing `PlayerView` plus a small status/error overlay, and narrowly focused helpers only where they make behavior testable:
 
-- `PlaybackRequest`: parse URI, incoming MIME type, optional title/source display metadata, prefixed bridge variants, and sanitized HTTP headers from the intent.
+- `PlaybackRequest`: parse URI, incoming MIME type and whether it was declared or guessed, optional title/source display metadata, prefixed bridge variants, reserve addresses, and sanitized HTTP headers from the intent.
 - `PlayerFactory`: construct the Media3 player, data source, renderer policy, and track constraints.
 - `PlaybackRecoveryController`: own first-frame detection, exactly-once DV base-layer retry, saved position, and terminal error state.
+- `SourceLadder`: own the codec-independent axis of recovery — which address and which container hint to open next when a stream fails.
 - `NightModeAudioProcessor`: compress decoded 16-bit PCM with linked-channel envelope/gain control before `AudioTrack`.
 - `NightModeController`: own and toggle that processor without depending on TCL audio effects.
 - `PlaybackActivity`: own lifecycle, `PlayerView`, D-pad dispatch, new intents, and user-visible errors.
@@ -107,7 +108,9 @@ Accept HTTP headers in these generic compatibility forms, in priority order:
 
 Keep only non-blank string names and values. Reject header names or values containing CR/LF. Do not log header values, bearer tokens, cookies, or full query strings. Preserve the caller's `User-Agent`, `Referer`, `Origin`, `Authorization`, and `Cookie`; supply a VibePlayer user agent only when the caller did not provide one.
 
-Use `DefaultHttpDataSource.Factory` with finite connect/read timeouts, cross-protocol redirects enabled, and `setDefaultRequestProperties`. Feed it through `DefaultMediaSourceFactory` so the same headers reach the master playlist, HLS variants, media segments, and progressive requests.
+Use an HTTP data source factory with finite connect/read timeouts, cross-protocol redirects enabled, and `setDefaultRequestProperties`. Feed it through `DefaultMediaSourceFactory` so the same headers reach the master playlist, HLS variants, media segments, and progressive requests.
+
+`OkHttpDataSource` applies its `setUserAgent` value with `addHeader` *after* the request properties, so setting both emits two `User-Agent` lines per request — the caller's and VibePlayer's. Some CDNs read that as a bot. Set the factory user agent only when the caller supplied none, which is also what the header rule above already requires.
 
 Accept optional external quality variants as paired `quality_levels` and `quality_urls` arrays. Preserve array positions: parse each label/value pair together and discard only that pair when malformed. A URL value may be a direct `Uri`, a direct URL string, or a JSON object string whose `url` property is the real media URL. Accept only `http`, `https`, `content`, and `file` schemes. Display the caller's outer quality label because it is the actual menu contract; do not replace it with an incidental label inside the JSON wrapper.
 
@@ -118,10 +121,24 @@ Use these reserved labels:
 - `@VIBEVOICE@<encoded-name>|<encoded-quality>` for direct/per-quality voiceover URLs.
 - `@VIBEEPISODE@<season>|<episode>|<percent>|<timeline-seconds>|<encoded-title>|<encoded-quality>` for playable entries already present in `data.playlist`.
 - `@VIBEMETA@<encoded-title>|<encoded-source>` for top-overlay display metadata; pair it with the current URL, then filter it out of VibePlayer's quality menu.
+- `@VIBERESERVE@<order>|<encoded-label>` for the backup addresses a source ships in `url_reserve` and `quality_reserve`. Order them with the reserve for the playing quality first, drop any that repeat the primary URL, and filter them out of VibePlayer's quality menu — they are transport for `SourceLadder`, not user-selectable qualities.
 
 VibePlayer parses these prefixes back into separate UI models. Show Season/Episode controls only when episode labels are actually present. Mark an episode watched only at more than 90%, show its number/title/progress, and resume from its serialized timeline time. The bridge code is source-agnostic, but playable voiceover and episode URLs still have to exist in the source payload; it cannot manufacture URLs hidden behind asynchronous provider callbacks. Never log stream URLs, headers, JSON callback bodies, or metadata payloads; structural counts are sufficient. Verify the installed bridge against the real source before claiming complete voiceover or episode coverage. Keep `docs/plugin.test.js` passing for JSON-string forwarding and all reserved label types.
 
 Allow cleartext HTTP deliberately in the manifest because the real source ecosystem may use it. Do not disable TLS validation.
+
+## Trust the response, not the address
+
+Lampa launches VibePlayer with a wildcard video type, so the file extension is the only container hint available. It is a guess, and balancers break it routinely: a `.m3u8` alias may redirect onto a plain CDN file, at which point Media3 has already committed to `HlsMediaSource` and dies parsing MP4 bytes as a playlist — `ERROR_CODE_PARSING_MANIFEST_MALFORMED` with a `.mp4` address in the preceding `onLoadError`.
+
+Record whether the MIME type was declared by the caller or guessed from the address, then let `SourceLadder` revise the guess when the response contradicts it. Two rules, each usable at most once, three media opens per playback in total:
+
+1. **Container fallback.** On a parsing error, reopen the address the data actually came from — `LoadEventInfo.uri` in `onLoadError` already carries it past redirects — with a MIME type Media3 does not route to a manifest parser, so the extractors sniff the real container.
+2. **Reserve fallback.** On an address that does not deliver at all, move to the next `@VIBERESERVE@` candidate.
+
+Rebuild the ladder whenever the playing URL changes — new intent, quality switch, episode switch — so one bad stream never spends another stream's budget. Keep this axis separate from the Dolby Vision axis in `PlaybackRecoveryController`: one is about which bytes to fetch, the other about which decoder to use.
+
+Never probe a source to answer these questions. No HEAD requests, no speculative GETs, no polling, no retry loops. Sources rate-limit and ban by IP, and a diagnostic request storm has already cost this project access once. Everything above is derived from information Media3 reports about loads that happened anyway.
 
 ## Define what "all content" means
 

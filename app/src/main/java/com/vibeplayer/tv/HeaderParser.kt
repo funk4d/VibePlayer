@@ -13,6 +13,10 @@ internal object HeaderParser {
         return result
     }
 
+    fun valueOf(headers: Map<String, String>, name: String): String? = headers.entries
+        .firstOrNull { it.key.trim().equals(name, ignoreCase = true) }
+        ?.value
+
     fun parseRaw(values: Array<String>?): Map<String, String> {
         if (values.isNullOrEmpty()) return emptyMap()
 

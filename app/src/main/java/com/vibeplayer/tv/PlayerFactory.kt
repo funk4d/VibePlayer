@@ -93,9 +93,17 @@ internal object PlayerFactory {
             .dns(dnsOverHttps)
             .build()
 
+        // OkHttpDataSource applies its own user agent with addHeader(), after the request
+        // properties have already been set. Supplying both therefore puts *two* User-Agent
+        // lines on every request — the source's own and ours — which some CDNs read as a
+        // bot. Ours is only a last resort, for callers that sent no user agent at all.
         val httpFactory = OkHttpDataSource.Factory(httpClient)
-            .setUserAgent("VibePlayer/0.20 (TCL EP680; Android 9)")
             .setDefaultRequestProperties(request.headers)
+            .apply {
+                if (HeaderParser.valueOf(request.headers, "User-Agent") == null) {
+                    setUserAgent(FALLBACK_USER_AGENT)
+                }
+            }
 
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
@@ -117,12 +125,14 @@ internal object PlayerFactory {
         return Result(player, trackSelector)
     }
 
-    fun mediaItem(request: PlaybackRequest): MediaItem {
+    fun mediaItem(source: SourceCandidate): MediaItem {
         return MediaItem.Builder()
-            .setUri(request.uri)
-            .apply { request.mimeType?.let(::setMimeType) }
+            .setUri(source.url)
+            .apply { source.mimeType?.let(::setMimeType) }
             .build()
     }
+
+    private const val FALLBACK_USER_AGENT = "VibePlayer/0.21 (TCL EP680; Android 9)"
 
     private val CLOUDFLARE_DNS_ADDRESSES = listOf(
         InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)),

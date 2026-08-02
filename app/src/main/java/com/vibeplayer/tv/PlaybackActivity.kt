@@ -66,6 +66,7 @@ class PlaybackActivity : Activity() {
     private var player: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
     private var request: PlaybackRequest? = null
+    private var sourceLadder: SourceLadder? = null
     private var isStarted = false
     private var restorePositionMs = 0L
     private var firstFrameRendered = false
@@ -303,6 +304,7 @@ class PlaybackActivity : Activity() {
     private fun acceptIntent(intent: Intent, resetRecovery: Boolean) {
         val parsed = PlaybackRequest.from(intent)
         request = parsed.getOrNull()
+        resetSourceLadder()
         if (resetRecovery) {
             recovery.reset()
             val selectedVariant = request?.qualityVariants
@@ -334,8 +336,26 @@ class PlaybackActivity : Activity() {
         }
     }
 
+    /**
+     * Rebuilds the fallback ladder for whatever address is current. Every change of the
+     * playing URL — a new intent, a quality switch, an episode switch — starts a fresh
+     * ladder, so one bad stream can never spend another stream's retry budget.
+     */
+    private fun resetSourceLadder() {
+        val activeRequest = request
+        sourceLadder = activeRequest?.let {
+            val url = it.uri.toString()
+            SourceLadder(
+                primaryUrl = url,
+                primaryMimeType = if (it.mimeTypeInferred) SourceLadder.containerHint(url) else it.mimeType,
+                reserveUrls = it.reserveUrls,
+            )
+        }
+    }
+
     private fun startPlayback(positionMs: Long) {
         val activeRequest = request ?: return
+        val source = sourceLadder?.current ?: return
         releasePlayer()
         firstFrameRendered = false
         currentVideoIsDolbyVision = false
@@ -349,8 +369,9 @@ class PlaybackActivity : Activity() {
 
         Log.i(
             TAG,
-            "Open ${activeRequest.safeLocation} mime=${activeRequest.mimeType ?: "auto"} " +
-                "headers=${activeRequest.headers.keys.sorted()} quality=${selectedQualityLabel ?: "auto"} " +
+            "Open ${LocationRedactor.redact(source.url)} mime=${source.mimeType ?: "auto"} " +
+                "source=${source.kind} headers=${activeRequest.headers.keys.sorted()} " +
+                "quality=${selectedQualityLabel ?: "auto"} " +
                 "position=${positionMs.coerceAtLeast(0L)} attempt=${recovery.attempt}",
         )
         showPersistentStatus("Loading…")
@@ -368,7 +389,7 @@ class PlaybackActivity : Activity() {
         playerView.player = newPlayer
         newPlayer.addListener(playerListener)
         newPlayer.addAnalyticsListener(analyticsListener)
-        newPlayer.setMediaItem(PlayerFactory.mediaItem(activeRequest), positionMs.coerceAtLeast(0L))
+        newPlayer.setMediaItem(PlayerFactory.mediaItem(source), positionMs.coerceAtLeast(0L))
         newPlayer.prepare()
         newPlayer.play()
         updateProgressUi()
@@ -1020,6 +1041,7 @@ class PlaybackActivity : Activity() {
         selectedVoiceoverLabel = variant.voiceoverLabel
         variant.episode?.let { selectedEpisodeInfo = it }
         request = activeRequest.copy(uri = variant.uri)
+        resetSourceLadder()
         updateVoiceoverButtonVisibility()
         updateSeriesControlsUi()
         val kind = if (variant.voiceoverLabel == null) "quality" else "voiceover"
@@ -1037,6 +1059,7 @@ class PlaybackActivity : Activity() {
         selectedVoiceoverLabel = null
         selectedQualityLabel = variant.label
         request = activeRequest.copy(uri = variant.uri)
+        resetSourceLadder()
         updateVoiceoverButtonVisibility()
         updateSeriesControlsUi()
         Log.i(
@@ -1083,6 +1106,30 @@ class PlaybackActivity : Activity() {
         Log.w(TAG, "$reason; retrying with HEVC/AVC base layer at $position ms")
         showPersistentStatus("Dolby Vision fallback…")
         startPlayback(position)
+    }
+
+    /**
+     * Moves to the next address the ladder offers, if any. Returns false when the ladder
+     * is out of options, which is the signal to give up rather than keep poking the source.
+     */
+    private fun retryWithNextSource(error: PlaybackException): Boolean {
+        val ladder = sourceLadder ?: return false
+        val position = player?.currentPosition ?: restorePositionMs
+        val next = ladder.next(SourceLadder.classify(error.errorCode)) ?: return false
+        Log.w(
+            TAG,
+            "Retrying as ${next.kind} mime=${next.mimeType ?: "auto"} " +
+                "location=${LocationRedactor.redact(next.url)}",
+        )
+        showPersistentStatus(
+            when (next.kind) {
+                SourceKind.CONTAINER_FALLBACK -> "Stream format differs — reopening…"
+                else -> "Trying backup stream…"
+            },
+        )
+        recovery.reset()
+        startPlayback(position)
+        return true
     }
 
     private fun showTemporaryStatus(message: String) {
@@ -1197,7 +1244,7 @@ class PlaybackActivity : Activity() {
             )
             if (currentVideoIsDolbyVision && recovery.attempt == PlaybackAttempt.NATIVE) {
                 retryWithBaseLayer("Native Dolby Vision decoder failed")
-            } else {
+            } else if (!retryWithNextSource(error)) {
                 recovery.markTerminal()
                 showPersistentStatus("Playback failed\n${error.errorCodeName}")
             }
@@ -1265,6 +1312,10 @@ class PlaybackActivity : Activity() {
             error: java.io.IOException,
             wasCanceled: Boolean,
         ) {
+            // loadEventInfo.uri is where the data was really read from, redirects included.
+            // Remembering it here is what lets a container fallback target the redirect
+            // target without asking the server anything a second time.
+            sourceLadder?.noteResolvedLocation(loadEventInfo.uri.toString())
             Log.w(
                 TAG,
                 "Load error type=${mediaLoadData.dataType} canceled=$wasCanceled " +

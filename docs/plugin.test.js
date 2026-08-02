@@ -38,12 +38,18 @@ const captured = {
     title: 'The Series',
     source: 'Alloha',
     url: 'https://media.example/current.m3u8',
+    url_reserve: 'https://backup.example/current.mp4',
     headers: {
         Cookie: 'source-provided-cookie',
         'X-Source-Header': 'source-provided-value'
     },
     quality: {
-        '1080p': 'https://media.example/current-1080.m3u8'
+        '1080p': 'https://media.example/current.m3u8',
+        '720p': 'https://media.example/current-720.m3u8'
+    },
+    quality_reserve: {
+        '1080p': 'https://backup.example/current-1080.mp4',
+        '720p': 'https://backup.example/current-720.mp4'
     },
     voiceovers: [{
         title: 'Dub',
@@ -80,20 +86,34 @@ assert(labels.includes('1080p'));
 assert(labels.some((label) => label.startsWith('@VIBEMETA@The%20Series|Alloha')));
 assert(labels.some((label) => label.startsWith('@VIBEVOICE@Dub|720p')));
 assert(labels.some((label) => label.startsWith('@VIBEEPISODE@1|2|94|122|Second%20Episode|1080p')));
+
+// Reserves ride along in source order, the one matching the playing quality first,
+// and the primary address is never repeated as its own backup.
+const reserves = labels
+    .filter((label) => label.startsWith('@VIBERESERVE@'))
+    .sort()
+    .map((label) => forwarded.quality[label]);
+assert.deepEqual(reserves, [
+    'https://backup.example/current.mp4',
+    'https://backup.example/current-1080.mp4',
+    'https://backup.example/current-720.mp4'
+]);
+assert.equal(context.window.VibePlayerBridge.lastStats.reserves, 3);
+assert(!reserves.includes('https://media.example/current.m3u8'));
 assert.equal(forwarded.headers.Cookie, 'source-provided-cookie');
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
 assert.equal(forwarded.headers.Accept, '*/*');
 assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
-assert.equal(context.window.VibePlayerBridge.version, '0.6.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.7.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 6);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.6.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.7.0'));
 
 forwardedPayload = null;
 assert.equal(

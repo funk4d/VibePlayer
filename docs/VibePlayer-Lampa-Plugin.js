@@ -1,10 +1,11 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.6.0';
+    var BRIDGE_VERSION = '0.7.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
+    var RESERVE_PREFIX = '@VIBERESERVE@';
 
     if (window.VibePlayerBridge && window.VibePlayerBridge.version === BRIDGE_VERSION) return;
     if (!window.Lampa || !Lampa.Android || typeof Lampa.Android.openPlayer !== 'function') {
@@ -27,11 +28,6 @@
             nonEmptyString(value.link) ||
             nonEmptyString(value.stream) ||
             nonEmptyString(value.path);
-    }
-
-    function isModssStream(value) {
-        var url = streamUrl(value);
-        return Boolean(url && /^https?:\/\/api\.modss\.tv(?::\d+)?(?:\/|$)/i.test(url));
     }
 
     function displayName(value) {
@@ -60,7 +56,7 @@
         ]);
     }
 
-    function sourceName(data, link) {
+    function sourceName(data) {
         return firstDisplayName([
             data && data.source_name,
             data && data.provider_name,
@@ -69,7 +65,7 @@
             data && data.provider,
             data && data.balancer,
             data && data.online
-        ]) || (isModssStream(link) ? 'MODS' : null);
+        ]);
     }
 
     function metadataLabel(title, source) {
@@ -78,7 +74,7 @@
 
     function serializeMetadata(link, data) {
         var title = contentTitle(data);
-        var source = sourceName(data, link);
+        var source = sourceName(data);
         var url = streamUrl(link) || streamUrl(data);
         if ((!title && !source) || !url) return 0;
 
@@ -165,7 +161,8 @@
         [
             'title', 'movie_title', 'source_name', 'provider_name', 'balancer_name',
             'source', 'provider', 'balancer', 'online', 'voiceovers', 'playlist',
-            'subtitles', 'subtitle', 'tracks', 'timeline', 'poster'
+            'subtitles', 'subtitle', 'tracks', 'timeline', 'poster',
+            'url_reserve', 'quality_reserve'
         ].forEach(function (name) {
             if (data[name] == null && captured[name] != null) data[name] = captured[name];
         });
@@ -245,6 +242,70 @@
         return { total: playlist.length, serialized: serialized };
     }
 
+    // Lampa sources routinely ship a backup address next to the chosen one, in url_reserve
+    // and quality_reserve. The built-in player falls back to them; an external player never
+    // saw them at all, because nothing carried them across the Intent.
+    function reserveCandidates(data, primaryUrl) {
+        var selected = selectedQualityLabel(data, primaryUrl);
+        var reserves = data.quality_reserve;
+        var ordered = [];
+
+        if (reserves && typeof reserves === 'object' && !Array.isArray(reserves)) {
+            // The reserve for the quality the user is actually watching goes first.
+            Object.keys(reserves).sort(function (left, right) {
+                return (left === selected ? -1 : 0) - (right === selected ? -1 : 0);
+            }).forEach(function (label) {
+                ordered.push({ label: label, url: streamUrl(reserves[label]) });
+            });
+        }
+        ordered.unshift({ label: 'reserve', url: streamUrl(data.url_reserve) });
+
+        var seen = {};
+        return ordered.filter(function (item) {
+            if (!item.url || item.url === primaryUrl || seen[item.url]) return false;
+            seen[item.url] = true;
+            return true;
+        });
+    }
+
+    // Labels this bridge itself wrote into data.quality. They are transport, not qualities,
+    // and must never be mistaken for one — including when openPlayer runs twice on one object.
+    function isBridgeLabel(label) {
+        return label.indexOf(LABEL_PREFIX) === 0 ||
+            label.indexOf(EPISODE_PREFIX) === 0 ||
+            label.indexOf(METADATA_PREFIX) === 0 ||
+            label.indexOf(RESERVE_PREFIX) === 0;
+    }
+
+    function selectedQualityLabel(data, primaryUrl) {
+        var qualities = data.quality;
+        if (!qualities || typeof qualities !== 'object' || Array.isArray(qualities)) return null;
+        var match = Object.keys(qualities).filter(function (label) {
+            return !isBridgeLabel(label) && streamUrl(qualities[label]) === primaryUrl;
+        });
+        return match.length ? match[0] : null;
+    }
+
+    function serializeReserves(link, data) {
+        var primaryUrl = streamUrl(link) || streamUrl(data);
+        var candidates = reserveCandidates(data, primaryUrl);
+        var qualities = Object.assign({}, data.quality || {});
+        Object.keys(qualities).forEach(function (label) {
+            if (label.indexOf(RESERVE_PREFIX) === 0) delete qualities[label];
+        });
+        if (!candidates.length) {
+            data.quality = qualities;
+            return 0;
+        }
+
+        candidates.forEach(function (item, index) {
+            qualities[RESERVE_PREFIX + index + '|' + encodeURIComponent(item.label)] = item.url;
+        });
+        data.quality = qualities;
+        console.info('[VibePlayer] reserves=' + candidates.length);
+        return candidates.length;
+    }
+
     function serializeVoiceovers(data) {
         var voiceovers = Array.isArray(data.voiceovers) ? data.voiceovers : [];
         var qualities = Object.assign({}, data.quality || {});
@@ -298,6 +359,7 @@
             metadata: 0,
             captured: false,
             headers: 0,
+            reserves: 0,
             voiceovers: { total: 0, serialized: 0 },
             episodes: { total: 0, serialized: 0 }
         };
@@ -305,6 +367,7 @@
             if (data) {
                 stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
                 stats.headers = addPlaybackHeaders(data);
+                stats.reserves = serializeReserves(link, data);
                 stats.metadata = serializeMetadata(link, data);
                 stats.voiceovers = serializeVoiceovers(data);
                 stats.episodes = serializeEpisodes(data);
@@ -323,10 +386,12 @@
         labelPrefix: LABEL_PREFIX,
         episodePrefix: EPISODE_PREFIX,
         metadataPrefix: METADATA_PREFIX,
+        reservePrefix: RESERVE_PREFIX,
         lastStats: {
             metadata: 0,
             captured: false,
             headers: 0,
+            reserves: 0,
             voiceovers: { total: 0, serialized: 0 },
             episodes: { total: 0, serialized: 0 }
         },
