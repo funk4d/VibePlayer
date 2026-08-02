@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.7.0';
+    var BRIDGE_VERSION = '0.8.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -138,40 +138,67 @@
         };
     }
 
-    function containsStreamUrl(value, expectedUrl) {
+    // Describes the whole card and stays true for every entry inside it.
+    var SESSION_FIELDS = [
+        'title', 'movie_title', 'source_name', 'provider_name', 'balancer_name',
+        'source', 'provider', 'balancer', 'online', 'voiceovers', 'playlist',
+        'subtitles', 'subtitle', 'tracks', 'poster'
+    ];
+
+    // Describes one specific stream. Belongs to whichever entry owns the launched URL,
+    // and to no other entry — a sibling episode's copy of these is simply wrong data.
+    var ITEM_FIELDS = ['timeline', 'url_reserve', 'quality_reserve'];
+
+    // True when this exact entry is the one being launched, rather than merely the
+    // container of the entry being launched.
+    function ownsStreamUrl(value, expectedUrl) {
         if (!value || !expectedUrl) return false;
         if (streamUrl(value) === expectedUrl) return true;
 
         var qualities = value.quality;
-        if (qualities && typeof qualities === 'object' && !Array.isArray(qualities)) {
-            if (Object.keys(qualities).some(function (label) {
+        return Boolean(qualities && typeof qualities === 'object' && !Array.isArray(qualities) &&
+            Object.keys(qualities).some(function (label) {
                 return streamUrl(qualities[label]) === expectedUrl;
-            })) return true;
-        }
+            }));
+    }
 
-        return Array.isArray(value.playlist) && value.playlist.some(function (item) {
-            return containsStreamUrl(item, expectedUrl);
+    function matchingCapture(captured, expectedUrl) {
+        if (!captured || !expectedUrl) return null;
+        if (ownsStreamUrl(captured, expectedUrl)) return captured;
+        if (!Array.isArray(captured.playlist)) return null;
+
+        for (var index = 0; index < captured.playlist.length; index += 1) {
+            if (ownsStreamUrl(captured.playlist[index], expectedUrl)) return captured.playlist[index];
+        }
+        return null;
+    }
+
+    function copyMissing(target, donor, names) {
+        if (!donor || typeof donor !== 'object') return;
+        names.forEach(function (name) {
+            if (target[name] == null && donor[name] != null) target[name] = donor[name];
         });
     }
 
     function enrichFromCapturedPlayback(data, captured, link) {
         var expectedUrl = streamUrl(link) || streamUrl(data);
-        if (!data || !captured || !containsStreamUrl(captured, expectedUrl)) return false;
+        if (!data || !captured) return false;
 
-        [
-            'title', 'movie_title', 'source_name', 'provider_name', 'balancer_name',
-            'source', 'provider', 'balancer', 'online', 'voiceovers', 'playlist',
-            'subtitles', 'subtitle', 'tracks', 'timeline', 'poster',
-            'url_reserve', 'quality_reserve'
-        ].forEach(function (name) {
-            if (data[name] == null && captured[name] != null) data[name] = captured[name];
-        });
+        // A hit anywhere in the capture used to be enough, so launching episode 2 pulled in
+        // episode 1's quality map and its backup addresses. Locate the entry that actually
+        // owns the launched URL, and take stream-specific data only from that entry.
+        var item = matchingCapture(captured, expectedUrl);
+        if (!item) return false;
 
-        if (captured.quality && typeof captured.quality === 'object') {
-            data.quality = Object.assign({}, captured.quality, data.quality || {});
+        copyMissing(data, captured, SESSION_FIELDS);
+        copyMissing(data, item, ITEM_FIELDS);
+
+        if (item.quality && typeof item.quality === 'object' && !Array.isArray(item.quality)) {
+            data.quality = Object.assign({}, item.quality, data.quality || {});
         }
-        if (captured.headers && typeof captured.headers === 'object') {
-            data.headers = Object.assign({}, captured.headers, data.headers || {});
+        var headers = (item !== captured && item.headers) || captured.headers;
+        if (headers && typeof headers === 'object') {
+            data.headers = Object.assign({}, headers, data.headers || {});
         }
         return true;
     }
@@ -294,7 +321,8 @@
             if (label.indexOf(RESERVE_PREFIX) === 0) delete qualities[label];
         });
         if (!candidates.length) {
-            data.quality = qualities;
+            // Never invent a quality map for a payload that had none.
+            if (data.quality) data.quality = qualities;
             return 0;
         }
 

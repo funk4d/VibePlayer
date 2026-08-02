@@ -106,14 +106,14 @@ assert.equal(forwarded.headers.Accept, '*/*');
 assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
-assert.equal(context.window.VibePlayerBridge.version, '0.7.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.8.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 6);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.7.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.8.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -136,5 +136,39 @@ assert.equal(overridden.headers.Origin, 'https://source.example');
 assert.equal(overridden.headers.Referer, 'https://source.example/watch');
 assert.equal(overridden.headers['User-Agent'], 'Source Agent');
 assert.equal(overridden.headers.Accept, 'application/vnd.apple.mpegurl');
+
+// Launching a sibling episode must not inherit the captured episode's streams. The capture
+// above is episode 1; episode 2 lives in its playlist and owns exactly one quality.
+forwardedPayload = null;
+assert.equal(
+    context.Lampa.Android.openPlayer(
+        'https://media.example/s01e02-1080.m3u8',
+        JSON.stringify({ url: 'https://media.example/s01e02-1080.m3u8' })
+    ),
+    'forwarded'
+);
+const episode = JSON.parse(forwardedPayload);
+const episodeQualities = Object.keys(episode.quality).filter((label) => !label.startsWith('@VIBE'));
+assert.deepEqual(episodeQualities, ['1080p']);
+assert.equal(episode.quality['1080p'], 'https://media.example/s01e02-1080.m3u8');
+assert.equal(Object.values(episode.quality).includes('https://media.example/current-720.m3u8'), false);
+assert.equal(Object.values(episode.quality).includes('https://media.example/current.m3u8'), false);
+// Backup addresses belong to episode 1, so episode 2 must ship none.
+assert.equal(context.window.VibePlayerBridge.lastStats.reserves, 0);
+assert.equal(episode.url_reserve, undefined);
+// Card-level context still travels: the title and the playlist describe the whole series.
+assert.equal(episode.title, 'The Series');
+assert.equal(episode.playlist.length, 1);
+
+// A launch that belongs to no captured entry is enriched with nothing at all.
+forwardedPayload = null;
+context.Lampa.Android.openPlayer(
+    'https://other.example/unrelated.m3u8',
+    JSON.stringify({ url: 'https://other.example/unrelated.m3u8' })
+);
+const unrelated = JSON.parse(forwardedPayload);
+assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
+assert.equal(unrelated.title, undefined);
+assert.equal(unrelated.quality, undefined);
 
 console.log('plugin bridge tests passed');
