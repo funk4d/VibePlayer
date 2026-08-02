@@ -10,8 +10,8 @@ android {
         applicationId = "com.vibeplayer.tv"
         minSdk = 28
         targetSdk = 28
-        versionCode = 19
-        versionName = "0.19.0"
+        versionCode = 20
+        versionName = "0.20.0"
 
         ndk {
             abiFilters += "armeabi-v7a"
@@ -50,7 +50,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     implementation(files("libs/media3-decoder-av1-1.10.1-armeabi-v7a.aar"))
 
     testImplementation("junit:junit:4.13.2")

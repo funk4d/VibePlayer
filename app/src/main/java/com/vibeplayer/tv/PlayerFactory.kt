@@ -1,13 +1,14 @@
 package com.vibeplayer.tv
 
 import android.content.Context
+import android.net.ConnectivityManager
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
@@ -15,6 +16,11 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.dnsoverhttps.DnsOverHttps
+import java.net.InetAddress
+import java.util.concurrent.TimeUnit
 
 @UnstableApi
 internal object PlayerFactory {
@@ -61,11 +67,34 @@ internal object PlayerFactory {
                 ),
         )
 
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(30_000)
-            .setUserAgent("VibePlayer/0.1 (TCL EP680; Android 9)")
+        val activeNetwork = context
+            .getSystemService(ConnectivityManager::class.java)
+            ?.activeNetwork
+        val bootstrapClient = OkHttpClient.Builder()
+            .connectTimeout(15_000, TimeUnit.MILLISECONDS)
+            .readTimeout(30_000, TimeUnit.MILLISECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .apply {
+                if (activeNetwork != null) {
+                    socketFactory(activeNetwork.socketFactory)
+                }
+            }
+            .build()
+        val dnsOverHttps = DnsOverHttps.Builder()
+            .client(bootstrapClient)
+            .url("https://cloudflare-dns.com/dns-query".toHttpUrl())
+            .bootstrapDnsHosts(CLOUDFLARE_DNS_ADDRESSES)
+            .includeIPv6(false)
+            .post(true)
+            .resolvePrivateAddresses(true)
+            .build()
+        val httpClient = bootstrapClient.newBuilder()
+            .dns(dnsOverHttps)
+            .build()
+
+        val httpFactory = OkHttpDataSource.Factory(httpClient)
+            .setUserAgent("VibePlayer/0.20 (TCL EP680; Android 9)")
             .setDefaultRequestProperties(request.headers)
 
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
@@ -94,6 +123,11 @@ internal object PlayerFactory {
             .apply { request.mimeType?.let(::setMimeType) }
             .build()
     }
+
+    private val CLOUDFLARE_DNS_ADDRESSES = listOf(
+        InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)),
+        InetAddress.getByAddress(byteArrayOf(1, 0, 0, 1)),
+    )
 }
 
 @UnstableApi

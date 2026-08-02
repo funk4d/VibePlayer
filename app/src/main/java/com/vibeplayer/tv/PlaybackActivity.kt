@@ -1268,9 +1268,18 @@ class PlaybackActivity : Activity() {
             Log.w(
                 TAG,
                 "Load error type=${mediaLoadData.dataType} canceled=$wasCanceled " +
-                    "error=${error.javaClass.simpleName}",
+                    "location=${LocationRedactor.redact(loadEventInfo.uri.toString())} " +
+                    "error=${error.javaClass.simpleName} root=${rootCauseName(error)}",
             )
         }
+    }
+
+    private fun rootCauseName(error: Throwable): String {
+        var current = error
+        repeat(MAX_CAUSE_DEPTH) {
+            current = current.cause ?: return current.javaClass.simpleName
+        }
+        return current.javaClass.simpleName
     }
 
     private fun stateName(state: Int): String = when (state) {
@@ -1311,6 +1320,7 @@ class PlaybackActivity : Activity() {
 
     private companion object {
         const val TAG = "VibePlayer"
+        private const val MAX_CAUSE_DEPTH = 8
         const val STATE_POSITION = "position"
         const val DEFAULT_SEEK_MS = 10_000L
         const val MIN_SEEK_MS = 5_000L

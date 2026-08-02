@@ -20,11 +20,13 @@ APK: `app/build/outputs/apk/debug/app-debug.apk`
 ## Install
 
 ```bash
-adb connect 192.168.68.111:5555
-adb -s 192.168.68.111:5555 install -r app/build/outputs/apk/debug/app-debug.apk
+adb connect <TV_IP>:5555
+adb -s <TV_IP>:5555 install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 VibePlayer accepts `ACTION_VIEW` intents for HTTP/HTTPS HLS, DASH, and progressive video. It forwards caller-provided HTTP headers to playlists and segments.
+
+On the TCL EP680, media traffic uses Media3's OkHttp data source with DNS-over-HTTPS and fixed Cloudflare bootstrap addresses. This bypasses a confirmed Android 9/Realtek resolver failure where app processes receive `EAI_NODATA` while the television shell resolves the same public hostname normally.
 
 ## Lampa plugin
 
