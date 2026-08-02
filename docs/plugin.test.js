@@ -106,14 +106,14 @@ assert.equal(forwarded.headers.Accept, '*/*');
 assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
-assert.equal(context.window.VibePlayerBridge.version, '0.8.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.9.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 6);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.8.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.9.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -170,5 +170,8 @@ const unrelated = JSON.parse(forwardedPayload);
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 assert.equal(unrelated.quality, undefined);
+
+// The bridge must report itself installed, otherwise it is silently doing nothing.
+assert.equal(context.window.VibePlayerBridge.installed, true);
 
 console.log('plugin bridge tests passed');

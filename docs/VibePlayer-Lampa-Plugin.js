@@ -1,17 +1,16 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.8.0';
+    var BRIDGE_VERSION = '0.9.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
     var RESERVE_PREFIX = '@VIBERESERVE@';
 
+    var INSTALL_ATTEMPTS = 60;
+    var INSTALL_INTERVAL_MS = 500;
+
     if (window.VibePlayerBridge && window.VibePlayerBridge.version === BRIDGE_VERSION) return;
-    if (!window.Lampa || !Lampa.Android || typeof Lampa.Android.openPlayer !== 'function') {
-        console.warn('[VibePlayer] Lampa Android bridge is unavailable');
-        return;
-    }
 
     function nonEmptyString(value) {
         return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -362,52 +361,6 @@
     }
 
     var capturedPlayback = null;
-    var originalPlayerPlay = Lampa.Player && typeof Lampa.Player.play === 'function' &&
-        (Lampa.Player.play.__vibeOriginal || Lampa.Player.play);
-    if (originalPlayerPlay) {
-        var wrappedPlayerPlay = function (data) {
-            if (data && typeof data === 'object') {
-                capturedPlayback = data;
-                window.VibePlayerBridge.lastCapture = captureSummary(data);
-                console.info(
-                    '[VibePlayer] captured fields=' + window.VibePlayerBridge.lastCapture.fields.join(',') +
-                    ' headers=' + window.VibePlayerBridge.lastCapture.headerNames.join(',')
-                );
-            }
-            return originalPlayerPlay.apply(this, arguments);
-        };
-        wrappedPlayerPlay.__vibeOriginal = originalPlayerPlay;
-        Lampa.Player.play = wrappedPlayerPlay;
-    }
-
-    var originalOpenPlayer = Lampa.Android.openPlayer.__vibeOriginal || Lampa.Android.openPlayer;
-    var wrappedOpenPlayer = function (link, payload) {
-        var data = decodePayload(payload);
-        var stats = {
-            metadata: 0,
-            captured: false,
-            headers: 0,
-            reserves: 0,
-            voiceovers: { total: 0, serialized: 0 },
-            episodes: { total: 0, serialized: 0 }
-        };
-        try {
-            if (data) {
-                stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
-                stats.headers = addPlaybackHeaders(data);
-                stats.reserves = serializeReserves(link, data);
-                stats.metadata = serializeMetadata(link, data);
-                stats.voiceovers = serializeVoiceovers(data);
-                stats.episodes = serializeEpisodes(data);
-            }
-        } catch (error) {
-            console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
-        }
-        window.VibePlayerBridge.lastStats = stats;
-        return originalOpenPlayer.call(this, link, data ? encodePayload(payload, data) : payload);
-    };
-    wrappedOpenPlayer.__vibeOriginal = originalOpenPlayer;
-    Lampa.Android.openPlayer = wrappedOpenPlayer;
 
     window.VibePlayerBridge = {
         version: BRIDGE_VERSION,
@@ -415,6 +368,7 @@
         episodePrefix: EPISODE_PREFIX,
         metadataPrefix: METADATA_PREFIX,
         reservePrefix: RESERVE_PREFIX,
+        installed: false,
         lastStats: {
             metadata: 0,
             captured: false,
@@ -432,5 +386,78 @@
         }
     };
 
-    console.info('[VibePlayer] bridge ' + BRIDGE_VERSION + ' loaded');
+    function hookPlayerPlay(Lampa) {
+        var original = Lampa.Player && typeof Lampa.Player.play === 'function' &&
+            (Lampa.Player.play.__vibeOriginal || Lampa.Player.play);
+        if (!original) return;
+
+        var wrapped = function (data) {
+            if (data && typeof data === 'object') {
+                capturedPlayback = data;
+                window.VibePlayerBridge.lastCapture = captureSummary(data);
+                console.info(
+                    '[VibePlayer] captured fields=' + window.VibePlayerBridge.lastCapture.fields.join(',') +
+                    ' headers=' + window.VibePlayerBridge.lastCapture.headerNames.join(',')
+                );
+            }
+            return original.apply(this, arguments);
+        };
+        wrapped.__vibeOriginal = original;
+        Lampa.Player.play = wrapped;
+    }
+
+    function hookOpenPlayer(Lampa) {
+        var original = Lampa.Android.openPlayer.__vibeOriginal || Lampa.Android.openPlayer;
+        var wrapped = function (link, payload) {
+            var data = decodePayload(payload);
+            var stats = {
+                metadata: 0,
+                captured: false,
+                headers: 0,
+                reserves: 0,
+                voiceovers: { total: 0, serialized: 0 },
+                episodes: { total: 0, serialized: 0 }
+            };
+            try {
+                if (data) {
+                    stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
+                    stats.headers = addPlaybackHeaders(data);
+                    stats.reserves = serializeReserves(link, data);
+                    stats.metadata = serializeMetadata(link, data);
+                    stats.voiceovers = serializeVoiceovers(data);
+                    stats.episodes = serializeEpisodes(data);
+                }
+            } catch (error) {
+                console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
+            }
+            window.VibePlayerBridge.lastStats = stats;
+            return original.call(this, link, data ? encodePayload(payload, data) : payload);
+        };
+        wrapped.__vibeOriginal = original;
+        Lampa.Android.openPlayer = wrapped;
+    }
+
+    function install() {
+        var Lampa = window.Lampa;
+        if (!Lampa || !Lampa.Android || typeof Lampa.Android.openPlayer !== 'function') return false;
+
+        hookPlayerPlay(Lampa);
+        hookOpenPlayer(Lampa);
+        window.VibePlayerBridge.installed = true;
+        console.info('[VibePlayer] bridge ' + BRIDGE_VERSION + ' installed');
+        return true;
+    }
+
+    // Plugins can run before Lampa has finished building its Android interface. Giving up at
+    // that moment leaves the bridge silently dead for the whole session, which looks exactly
+    // like "the bridge sends nothing". Watch for the interface instead; this waits on window
+    // state only and makes no requests.
+    if (!install() && typeof setInterval === 'function') {
+        console.info('[VibePlayer] waiting for the Lampa Android interface');
+        var attempts = 0;
+        var timer = setInterval(function () {
+            attempts += 1;
+            if (install() || attempts >= INSTALL_ATTEMPTS) clearInterval(timer);
+        }, INSTALL_INTERVAL_MS);
+    }
 })();

@@ -328,10 +328,17 @@ class PlaybackActivity : Activity() {
             }
             showPersistentStatus(message)
         } else {
+            // Structural counts only: this is the one signal that says whether the Lampa
+            // bridge is alive and what it managed to serialize. Never log URLs or headers.
+            val variants = activeRequest.qualityVariants
             Log.i(
                 TAG,
                 "Intent position=${activeRequest.startPositionMs}ms " +
-                    "qualityLabels=${activeRequest.qualityVariants.map { it.label }}",
+                    "qualityLabels=${variants.filter { it.episode == null && it.voiceoverLabel == null }.map { it.label }} " +
+                    "bridge=[title=${activeRequest.title != null} source=${activeRequest.sourceName != null} " +
+                    "episodes=${variants.count { it.episode != null }} " +
+                    "voiceovers=${variants.mapNotNull { it.voiceoverLabel }.distinct().size} " +
+                    "reserves=${activeRequest.reserveUrls.size}]",
             )
         }
     }
