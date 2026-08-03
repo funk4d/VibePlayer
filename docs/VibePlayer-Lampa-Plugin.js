@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.22.0';
+    var BRIDGE_VERSION = '0.23.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -374,6 +374,36 @@
         return EPISODE_PREFIX + fields.join('|');
     }
 
+    /**
+     * Every address an episode has, by quality name.
+     *
+     * A source keeps its per-quality addresses beside the default one, in `qualitys`. Serialising
+     * only the default leaves an episode chosen inside the player with a single address and no
+     * quality to choose - which is exactly what Lampa itself sends six of when it launches that
+     * same episode.
+     */
+    function itemQualities(item) {
+        var qualities = item && (item.qualitys || item.qualities);
+        var found = [];
+
+        if (Array.isArray(qualities)) {
+            qualities.forEach(function (entry) {
+                var url = streamUrl(entry);
+                var label = plainText(entry && (entry.label || entry.quality || entry.name));
+                if (url) found.push({ label: label || 'Auto', url: url });
+            });
+        } else if (qualities && typeof qualities === 'object') {
+            Object.keys(qualities).forEach(function (label) {
+                var url = streamUrl(qualities[label]);
+                if (url) found.push({ label: plainText(label) || 'Auto', url: url });
+            });
+        }
+
+        if (found.length) return found;
+        var single = itemStream(item);
+        return single ? [{ label: plainText(item && item.quality_label) || 'Auto', url: single }] : [];
+    }
+
     function episodeNumber(item) {
         var value = parseInt(item && item.episode, 10);
         return isFinite(value) && value > 0 ? value : null;
@@ -393,14 +423,17 @@
 
         items.forEach(function (item) {
             var number = episodeNumber(item);
-            var url = itemStream(item);
-            if (!number || !url) return;
+            if (!number) return;
             var voice = plainText(item.voice_name) || '';
-            var key = voice + '|' + integer(item.season, 0) + 'x' + number;
-            if (seen[key]) return;
-            seen[key] = true;
-            qualities[episodeLabel(item, item.quality_label || 'Auto')] = url;
-            serialized += 1;
+            var base = voice + '|' + integer(item.season, 0) + 'x' + number;
+
+            itemQualities(item).forEach(function (entry) {
+                var key = base + '|' + entry.label;
+                if (seen[key]) return;
+                seen[key] = true;
+                qualities[episodeLabel(item, entry.label)] = entry.url;
+                serialized += 1;
+            });
         });
 
         // Whatever the payload already carried stays authoritative for entries we missed.
