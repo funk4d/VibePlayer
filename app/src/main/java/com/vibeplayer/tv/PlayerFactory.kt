@@ -36,8 +36,21 @@ internal object PlayerFactory {
         attempt: PlaybackAttempt,
         audioOffsetProcessor: AudioOffsetProcessor,
         nightModeAudioProcessor: NightModeAudioProcessor,
+        forceSoftwareVideo: Boolean = false,
     ): Result {
-        val codecSelector = if (attempt == PlaybackAttempt.BASE_LAYER) {
+        val codecSelector = if (forceSoftwareVideo) {
+            // The platform decoder on this television declares no alignment limits and
+            // mis-decodes some streams the built-in player handles, so there has to be a way
+            // to hand the same stream to a software decoder and compare.
+            MediaCodecSelector { mimeType, secure, tunneling ->
+                val all = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
+                if (!mimeType.startsWith("video/")) {
+                    all
+                } else {
+                    all.sortedBy { info -> if (info.softwareOnly) 0 else 1 }
+                }
+            }
+        } else if (attempt == PlaybackAttempt.BASE_LAYER) {
             MediaCodecSelector { mimeType, secure, tunneling ->
                 if (mimeType == MimeTypes.VIDEO_DOLBY_VISION) {
                     emptyList()
