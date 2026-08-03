@@ -142,6 +142,27 @@ Rebuild the ladder whenever the playing URL changes — new intent, quality swit
 
 Never probe a source to answer these questions. No HEAD requests, no speculative GETs, no polling, no retry loops. Sources rate-limit and ban by IP, and a diagnostic request storm has already cost this project access once. Everything above is derived from information Media3 reports about loads that happened anyway.
 
+## Read the catalogue the source already loaded
+
+An online source resolves a season once and keeps the whole result in memory. In the MODS
+component that arrives at `parse(json)` as `{ voice: [...], season: [...], folder: { voice:
+{ season: [ episodes ] } } }`, and every episode in it carries a direct `stream` alongside the
+`url` that would need resolving. Reading that structure gives the external player every
+season, episode and voiceover the source knows about, at the cost of nothing.
+
+Two facts decide where to attach:
+
+- The component instance is rebuilt whenever the balancer changes, so a one-time wrap is lost
+  the first time the user switches source. Re-wrap on a timer, tag each wrapper with the
+  bridge version, and replace a wrapper left by an earlier load instead of stacking on it.
+- Only the active activity is not enough — opening a season or voice selector pushes a modal
+  on top, so wrap the component of every live activity.
+
+Do not guess which method carries the data. Count calls on every method of the live component,
+change a source, and read which ones fired; `getEpisodesByVoice` looks like the answer and is
+never called. Serialize episodes for the playing voice only, and other voices only for the
+episode being watched, or the lists multiply into nonsense.
+
 ## Reach the source the same way the WebView did
 
 Balancers hand out stream addresses as opaque single-use tokens bound to the client they were

@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.11.0';
+    var BRIDGE_VERSION = '0.13.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -9,6 +9,11 @@
 
     var INSTALL_ATTEMPTS = 60;
     var INSTALL_INTERVAL_MS = 500;
+    // The online component is rebuilt per card, so its methods are re-wrapped as it appears.
+    var COMPONENT_WATCH_MS = 1000;
+    // A whole series across every voice can be hundreds of entries; the Intent is not a
+    // place to discover a size limit the hard way.
+    var MAX_SOURCE_ITEMS = 400;
 
     if (window.VibePlayerBridge && window.VibePlayerBridge.version === BRIDGE_VERSION) return;
 
@@ -258,13 +263,43 @@
         return EPISODE_PREFIX + fields.join('|');
     }
 
+    function episodeNumber(item) {
+        var value = parseInt(item && item.episode, 10);
+        return isFinite(value) && value > 0 ? value : null;
+    }
+
+    /**
+     * Episodes for the voice currently being watched, across every season the source
+     * supplied. A different voice is a different stream of the same episode and belongs in
+     * the voiceover list, not here, or the episode list would show each episode many times.
+     */
     function serializeEpisodes(data) {
+        var items = allSourceItems();
         var playlist = Array.isArray(data.playlist) ? data.playlist : [];
         var qualities = Object.assign({}, data.quality || {});
+        var currentVoice = nonEmptyString(data.voice_name);
+        var seen = {};
         var serialized = 0;
 
+        items.forEach(function (item) {
+            var number = episodeNumber(item);
+            var url = itemStream(item);
+            if (!number || !url) return;
+            var voice = nonEmptyString(item.voice_name);
+            if (currentVoice && voice && voice !== currentVoice) return;
+
+            var key = integer(item.season, 0) + 'x' + number;
+            if (seen[key]) return;
+            seen[key] = true;
+            qualities[episodeLabel(item, item.quality_label || 'Auto')] = url;
+            serialized += 1;
+        });
+
+        // Whatever the payload already carried stays authoritative for entries we missed.
         playlist.forEach(function (item) {
             if (!item || typeof item !== 'object') return;
+            var number = episodeNumber(item);
+            if (!number || seen[integer(item.season, 0) + 'x' + number]) return;
             var variants = item.quality;
             if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
                 Object.keys(variants).forEach(function (quality) {
@@ -282,8 +317,8 @@
         });
 
         if (serialized) data.quality = qualities;
-        console.info('[VibePlayer] episodes=' + playlist.length + ' serialized=' + serialized);
-        return { total: playlist.length, serialized: serialized };
+        console.info('[VibePlayer] episodes=' + items.length + ' serialized=' + serialized);
+        return { total: items.length || playlist.length, serialized: serialized };
     }
 
     // Lampa sources routinely ship a backup address next to the chosen one, in url_reserve
@@ -351,10 +386,36 @@
         return candidates.length;
     }
 
+    /**
+     * The other voices for the episode being watched. Each is an alternate stream of the
+     * same moment, which is exactly what the player's voiceover list switches between, so
+     * they carry no episode of their own.
+     */
+    function serializeSourceVoices(data, qualities) {
+        var current = nonEmptyString(data.voice_name);
+        var season = integer(data.season, 0);
+        var episode = episodeNumber(data) || integer(data.episode, 0);
+        var seen = {};
+        var serialized = 0;
+
+        allSourceItems().forEach(function (item) {
+            var voice = nonEmptyString(item.voice_name);
+            var url = itemStream(item);
+            if (!voice || !url || voice === current || seen[voice]) return;
+            // Only the same point in the series - another episode under another voice would
+            // silently jump the viewer somewhere else.
+            if (integer(item.season, 0) !== season) return;
+            if (episode && episodeNumber(item) !== episode) return;
+            seen[voice] = true;
+            serialized += addVariant(qualities, voice, item.quality_label || 'Auto', url);
+        });
+        return serialized;
+    }
+
     function serializeVoiceovers(data) {
         var voiceovers = Array.isArray(data.voiceovers) ? data.voiceovers : [];
         var qualities = Object.assign({}, data.quality || {});
-        var serialized = 0;
+        var serialized = serializeSourceVoices(data, qualities);
 
         voiceovers.forEach(function (item, index) {
             if (!item || typeof item !== 'object') return;
@@ -378,6 +439,144 @@
         return { total: voiceovers.length, serialized: serialized };
     }
 
+    // ---------------------------------------------------------------------------------
+    // Source items.
+    //
+    // Lampa serialises the playback payload with JSON.stringify before handing it to the
+    // Android app, and an online source that resolves episode addresses on demand stores
+    // those as functions - which JSON.stringify silently drops. The external player then
+    // receives a season of episodes with no addresses at all.
+    //
+    // The addresses do exist: every playlist cell is built from a source item that already
+    // carries a direct `stream`. Watch the component build them and keep the pairing. This
+    // reads what the plugin has already loaded and asks the network for nothing.
+    // ---------------------------------------------------------------------------------
+
+    var sourceItems = [];
+    var sourceFolder = null;
+
+    var hookHits = {};
+
+    /**
+     * Every live activity's component, not just the topmost one: opening a season or voice
+     * selector pushes a modal on top, so the list that owns the data is no longer "active".
+     */
+    function onlineComponents() {
+        var Lampa = window.Lampa;
+        if (!Lampa || !Lampa.Activity) return [];
+        var activities = [];
+        if (typeof Lampa.Activity.all === 'function') activities = Lampa.Activity.all() || [];
+        if (typeof Lampa.Activity.active === 'function') {
+            var active = Lampa.Activity.active();
+            if (active && activities.indexOf(active) === -1) activities.push(active);
+        }
+        return activities
+            .map(function (activity) { return activity && activity.activity && activity.activity.component; })
+            .filter(function (component) { return component && typeof component === 'object'; });
+    }
+
+    function itemStream(item) {
+        if (!item || typeof item !== 'object') return null;
+        // A resolved address wins; `url` may be an API endpoint rather than media, and the
+        // component's own external-player helper prefers `stream` for exactly that reason.
+        return nonEmptyString(item.stream) || nonEmptyString(item.url);
+    }
+
+    function rememberItem(item) {
+        if (!item || typeof item !== 'object' || !itemStream(item)) return;
+        if (sourceItems.length >= MAX_SOURCE_ITEMS) return;
+        if (sourceItems.indexOf(item) === -1) sourceItems.push(item);
+    }
+
+    function wrapComponentMethod(component, name, observer) {
+        var current = component[name];
+        if (typeof current !== 'function') return false;
+        // A wrapper left by an earlier load of this bridge still feeds that load's closure,
+        // which no longer receives anything. Replace it rather than stacking on top of it.
+        if (current.__vibeWrapped === BRIDGE_VERSION) return false;
+        var original = current.__vibeOriginal || current;
+        var wrapped = function () {
+            hookHits[name] = (hookHits[name] || 0) + 1;
+            try { observer.apply(null, arguments); } catch (error) { /* diagnostics only */ }
+            return original.apply(this, arguments);
+        };
+        wrapped.__vibeWrapped = BRIDGE_VERSION;
+        wrapped.__vibeOriginal = original;
+        component[name] = wrapped;
+        return true;
+    }
+
+    function rememberFolder(value) {
+        // parse() is where the component turns a balancer answer into its own structure:
+        // { voice: [...], season: [...], folder: { voice: { season: [ episodes ] } } }.
+        // Every episode in there already carries a direct stream, for every voice and every
+        // season, which is the whole catalogue the source has to offer at zero further cost.
+        var folder = value && typeof value === 'object' ? value.folder : null;
+        if (folder && typeof folder === 'object') sourceFolder = folder;
+    }
+
+    function hookSourceComponent() {
+        onlineComponents().forEach(function (component) {
+            wrapComponentMethod(component, 'parse', rememberFolder);
+            wrapComponentMethod(component, 'toPlayElement', rememberItem);
+        });
+    }
+
+    /** Every item the balancer supplied, flattened out of folder[voice][season]. */
+    function folderItems() {
+        var folder = sourceFolder;
+        if (!folder || typeof folder !== 'object') return [];
+        var items = [];
+
+        function collect(value, depth) {
+            if (items.length >= MAX_SOURCE_ITEMS || !value || typeof value !== 'object') return;
+            if (Array.isArray(value)) {
+                value.forEach(function (entry) {
+                    if (entry && typeof entry === 'object' && itemStream(entry)) {
+                        if (items.length < MAX_SOURCE_ITEMS) items.push(entry);
+                    }
+                });
+                return;
+            }
+            if (depth > 2) return;
+            Object.keys(value).forEach(function (key) { collect(value[key], depth + 1); });
+        }
+
+        collect(folder, 0);
+        return items;
+    }
+
+    function allSourceItems() {
+        var items = folderItems();
+        sourceItems.forEach(function (item) {
+            if (items.indexOf(item) === -1) items.push(item);
+        });
+        return items;
+    }
+
+    /** Structural view of what the source handed us, for diagnosis. Counts and names only. */
+    function sourceSummary() {
+        var items = allSourceItems();
+        var voices = [];
+        var seasons = [];
+        items.forEach(function (item) {
+            var voice = nonEmptyString(item.voice_name);
+            if (voice && voices.indexOf(voice) === -1) voices.push(voice);
+            var season = integer(item.season, -1);
+            if (season >= 0 && seasons.indexOf(season) === -1) seasons.push(season);
+        });
+        return {
+            items: items.length,
+            withStream: items.filter(itemStream).length,
+            voices: voices,
+            seasons: seasons.sort(function (a, b) { return a - b; }),
+            folderKeys: sourceFolder && typeof sourceFolder === 'object'
+                ? Object.keys(sourceFolder).slice(0, 30)
+                : null,
+            hits: hookHits
+        };
+    }
+
     var capturedPlayback = null;
 
     window.VibePlayerBridge = {
@@ -387,6 +586,8 @@
         metadataPrefix: METADATA_PREFIX,
         reservePrefix: RESERVE_PREFIX,
         installed: false,
+        sourceSummary: function () { return sourceSummary(); },
+        lastSource: { items: 0, withStream: 0, voices: [], seasons: [] },
         lastStats: {
             metadata: 0,
             captured: false,
@@ -449,6 +650,7 @@
                 console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
             }
             window.VibePlayerBridge.lastStats = stats;
+            window.VibePlayerBridge.lastSource = sourceSummary();
             return original.call(this, link, data ? encodePayload(payload, data) : payload);
         };
         wrapped.__vibeOriginal = original;
@@ -461,6 +663,8 @@
 
         hookPlayerPlay(Lampa);
         hookOpenPlayer(Lampa);
+        hookSourceComponent();
+        if (typeof setInterval === 'function') setInterval(hookSourceComponent, COMPONENT_WATCH_MS);
         window.VibePlayerBridge.installed = true;
         console.info('[VibePlayer] bridge ' + BRIDGE_VERSION + ' installed');
         return true;
