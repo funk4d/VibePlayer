@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.24.0';
+    var BRIDGE_VERSION = '0.25.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -575,7 +575,7 @@
 
     var sourceItems = [];
     var sourceFolder = null;
-    var folderOwner = null;
+    var folderCard = null;
 
     var hookHits = {};
 
@@ -636,12 +636,13 @@
         var folder = value && typeof value === 'object' ? value.folder : null;
         if (!folder || typeof folder !== 'object') return;
 
-        // A component is rebuilt per balancer, so its identity says whether this answer
-        // continues the current source or replaces it. Answers can arrive in parts - one
-        // season, one voice - and replacing on every one of them loses the rest.
-        var owner = this;
-        if (owner !== folderOwner) {
-            folderOwner = owner;
+        // Answers arrive in parts - one season, one voice - and the component is rebuilt
+        // between them, so its identity cannot say whether an answer continues the current
+        // source. The card can: while it is the same card, parts belong together.
+        var movie = activeMovie();
+        var card = movie && (movie.id || movie.original_title || movie.title) || null;
+        if (card !== folderCard) {
+            folderCard = card;
             sourceFolder = folder;
             sourceItems = [];
             return;

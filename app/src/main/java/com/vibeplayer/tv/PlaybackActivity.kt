@@ -88,7 +88,7 @@ class PlaybackActivity : Activity() {
     private var decoderInfo: String? = null
     private var seekIntervalMs = DEFAULT_SEEK_MS
     private var audioOffsetMs = 0
-    private var videoPathMode = VIDEO_PATH_HARDWARE_SURFACE
+    private var videoPathMode = VIDEO_PATH_HARDWARE_TEXTURE
     private var restorePlayFocusBackground = false
     private var shortMediaReported = false
     private var stubRetries = 0
@@ -306,7 +306,7 @@ class PlaybackActivity : Activity() {
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         seekIntervalMs = preferences.getLong(PREF_SEEK_INTERVAL_MS, DEFAULT_SEEK_MS)
             .coerceIn(MIN_SEEK_MS, MAX_SEEK_MS)
-        videoPathMode = preferences.getInt(PREF_VIDEO_PATH, VIDEO_PATH_HARDWARE_SURFACE)
+        videoPathMode = preferences.getInt(PREF_VIDEO_PATH, VIDEO_PATH_HARDWARE_TEXTURE)
             .coerceIn(VIDEO_PATH_HARDWARE_SURFACE, VIDEO_PATH_SOFTWARE)
         audioOffsetMs = preferences.getInt(PREF_AUDIO_OFFSET_MS, 0)
             .coerceIn(-AudioOffsetProcessor.MAX_OFFSET_MS, AudioOffsetProcessor.MAX_OFFSET_MS)
@@ -616,43 +616,70 @@ class PlaybackActivity : Activity() {
 
     private fun showSettingsDialog() {
         val quality = selectedQualityLabel ?: selectedVideoFormatLabel() ?: "Auto"
-        val subtitles = selectedTrackLabel(C.TRACK_TYPE_TEXT) ?: getString(R.string.off)
+        val voice = selectedVoiceoverLabel ?: "—"
         val audio = selectedTrackLabel(C.TRACK_TYPE_AUDIO) ?: "Auto"
+        val subtitles = selectedTrackLabel(C.TRACK_TYPE_TEXT) ?: getString(R.string.off)
         val items = arrayOf(
             "${getString(R.string.quality)}: $quality",
+            "${getString(R.string.voiceover)}: $voice",
             "${getString(R.string.audio)}: $audio",
             "${getString(R.string.subtitles)}: $subtitles",
+            getString(R.string.settings),
+        )
+        showDialog(title = getString(R.string.settings), items = items) { index ->
+            when (index) {
+                0 -> showQualityDialog()
+                1 -> showVoiceoverDialog()
+                2 -> showTrackDialog(C.TRACK_TYPE_AUDIO)
+                3 -> showTrackDialog(C.TRACK_TYPE_TEXT)
+                4 -> showAdvancedSettingsDialog()
+            }
+        }
+    }
+
+    /** The knobs that are set once and forgotten, kept out of the way of the everyday ones. */
+    private fun showAdvancedSettingsDialog() {
+        val items = arrayOf(
             "Seek step: ${seekIntervalMs / 1_000L}s",
             "Audio sync: ${formatAudioOffset(audioOffsetMs)}",
             getString(if (nightMode.requestedEnabled) R.string.night_mode_on else R.string.night_mode_off),
             "Video path: ${videoPathName()}",
         )
-        showDialog(
-            title = getString(R.string.settings),
-            items = items,
-        ) { index ->
+        showDialog(title = getString(R.string.settings), items = items) { index ->
             when (index) {
-                0 -> showQualityDialog()
-                1 -> showTrackDialog(C.TRACK_TYPE_AUDIO)
-                2 -> showTrackDialog(C.TRACK_TYPE_TEXT)
-                3 -> showSeekIntervalDialog()
-                4 -> showAudioOffsetDialog()
-                5 -> {
+                0 -> showSeekIntervalDialog()
+                1 -> showAudioOffsetDialog()
+                2 -> {
                     nightMode.toggle()
                     showTemporaryStatus(
                         getString(if (nightMode.requestedEnabled) R.string.night_mode_on else R.string.night_mode_off),
                     )
                 }
-                6 -> {
-                    videoPathMode = (videoPathMode + 1) % (VIDEO_PATH_SOFTWARE + 1)
-                    getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE).edit()
-                        .putInt(PREF_VIDEO_PATH, videoPathMode)
-                        .apply()
-                    Log.i(TAG, "Video path=${videoPathName()}")
-                    showPersistentStatus(videoPathName())
-                    startPlayback(player?.currentPosition ?: restorePositionMs)
-                }
+                3 -> showVideoPathDialog()
             }
+        }
+    }
+
+    private fun showVideoPathDialog() {
+        val modes = listOf(
+            VIDEO_PATH_HARDWARE_TEXTURE,
+            VIDEO_PATH_HARDWARE_SURFACE,
+            VIDEO_PATH_SOFTWARE,
+        )
+        val labels = modes.map { mode ->
+            val name = videoPathName(mode)
+            if (mode == videoPathMode) "✓ $name" else name
+        }.toTypedArray()
+        showDialog(title = "Video path", items = labels) { index ->
+            val chosen = modes[index]
+            if (chosen == videoPathMode) return@showDialog
+            videoPathMode = chosen
+            getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE).edit()
+                .putInt(PREF_VIDEO_PATH, videoPathMode)
+                .apply()
+            Log.i(TAG, "Video path=${videoPathName()}")
+            showPersistentStatus(videoPathName())
+            startPlayback(player?.currentPosition ?: restorePositionMs)
         }
     }
 
@@ -1672,7 +1699,7 @@ class PlaybackActivity : Activity() {
      * cleanly, and the two differ in how the frames reach the screen: straight into a surface,
      * or through a texture. Being able to try both is what tells those apart.
      */
-    private fun videoPathName(): String = when (videoPathMode) {
+    private fun videoPathName(mode: Int = videoPathMode): String = when (mode) {
         VIDEO_PATH_HARDWARE_TEXTURE -> "hardware · texture"
         VIDEO_PATH_SOFTWARE -> "software"
         else -> "hardware · surface"
