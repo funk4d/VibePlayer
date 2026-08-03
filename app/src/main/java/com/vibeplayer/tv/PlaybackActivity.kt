@@ -82,6 +82,7 @@ class PlaybackActivity : Activity() {
     private var settingsDialogOpen = false
     private var dialogReturnFocus: View? = null
     private var videoInfo: String? = null
+    private var currentVideoCodec: String? = null
     private var audioInfo: String? = null
     private var decoderInfo: String? = null
     private var seekIntervalMs = DEFAULT_SEEK_MS
@@ -395,6 +396,7 @@ class PlaybackActivity : Activity() {
         releasePlayer()
         firstFrameRendered = false
         shortMediaReported = false
+        currentVideoCodec = null
         currentVideoIsDolbyVision = false
         unsupportedVideoMessage = null
         oversizedAv1WarningLogged = false
@@ -703,7 +705,11 @@ class PlaybackActivity : Activity() {
         val variants = activeQualityVariants()
         if (variants.isNotEmpty()) {
             val labels = variants.map { variant ->
-                if (variant.label == selectedQualityLabel) "✓ ${variant.label}" else variant.label
+                if (variant.label == selectedQualityLabel) {
+                    listOfNotNull("✓ ${variant.label}", currentVideoCodec).joinToString(" · ")
+                } else {
+                    variant.label
+                }
             }.toTypedArray()
             showDialog(getString(R.string.quality), labels) { index ->
                 switchToExternalQuality(variants[index])
@@ -1139,7 +1145,7 @@ class PlaybackActivity : Activity() {
     private fun videoTrackLabel(track: SelectableTrack): String {
         val format = track.group.getTrackFormat(track.index)
         val resolution = format.height.takeIf { it > 0 }?.let { "${it}p" } ?: "Auto"
-        return listOfNotNull(resolution, format.codecs).joinToString(" · ")
+        return listOfNotNull(resolution, videoCodecName(format)).joinToString(" · ")
     }
 
     private fun switchToExternalQuality(variant: QualityVariant) {
@@ -1446,6 +1452,7 @@ class PlaybackActivity : Activity() {
         ) {
             currentVideoIsDolbyVision = format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION
             val profile = MediaCodecUtil.getCodecProfileAndLevel(format)?.first
+            currentVideoCodec = videoCodecName(format)
             videoInfo = buildList {
                 // The technical line reports what is actually being decoded. A badge rounds
                 // 1920x864 up to "1080" and hides the crop, which is the one thing worth
