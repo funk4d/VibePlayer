@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.21.0';
+    var BRIDGE_VERSION = '0.22.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -536,6 +536,7 @@
 
     var sourceItems = [];
     var sourceFolder = null;
+    var folderOwner = null;
 
     var hookHits = {};
 
@@ -595,10 +596,22 @@
         // season, which is the whole catalogue the source has to offer at zero further cost.
         var folder = value && typeof value === 'object' ? value.folder : null;
         if (!folder || typeof folder !== 'object') return;
-        // A new answer describes a different balancer. Entries kept from the previous one
-        // would otherwise show up as voices this source never had.
-        sourceFolder = folder;
-        sourceItems = [];
+
+        // A component is rebuilt per balancer, so its identity says whether this answer
+        // continues the current source or replaces it. Answers can arrive in parts - one
+        // season, one voice - and replacing on every one of them loses the rest.
+        var owner = this;
+        if (owner !== folderOwner) {
+            folderOwner = owner;
+            sourceFolder = folder;
+            sourceItems = [];
+            return;
+        }
+        if (folder === sourceFolder) return;
+        var merged = {};
+        Object.keys(sourceFolder || {}).forEach(function (voice) { merged[voice] = sourceFolder[voice]; });
+        Object.keys(folder).forEach(function (voice) { merged[voice] = folder[voice]; });
+        sourceFolder = merged;
     }
 
     function hookSourceComponent() {

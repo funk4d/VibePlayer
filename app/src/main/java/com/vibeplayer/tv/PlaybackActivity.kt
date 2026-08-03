@@ -1080,7 +1080,10 @@ class PlaybackActivity : Activity() {
             return
         }
         val parts = buildList {
-            if (buffering) add("Buffering ${activePlayer?.bufferedPercentage ?: 0}%")
+            // How much is loaded ahead is worth seeing all the time on this television, not
+            // only once playback has already stalled.
+            val buffered = activePlayer?.bufferedPercentage ?: 0
+            if (buffering) add("Buffering $buffered%") else add("Buffer $buffered%")
             videoInfo?.let(::add)
             decoderInfo?.let(::add)
             audioInfo?.let(::add)
@@ -1219,10 +1222,20 @@ class PlaybackActivity : Activity() {
             "Source returned ${duration}ms of media - too short for a title; " +
                 "this is what a refusal notice looks like source=${request?.sourceName ?: "unknown"}",
         )
-        val next = sourceLadder?.next(SourceFailure.UNAVAILABLE) ?: return
-        Log.w(TAG, "Refusal notice - moving to ${next.kind} ${LocationRedactor.redact(next.url)}")
-        showPersistentStatus("Source refused the stream — trying a backup…")
-        startPlayback(restorePositionMs)
+        val next = sourceLadder?.next(SourceFailure.UNAVAILABLE)
+        if (next != null) {
+            Log.w(TAG, "Refusal notice - moving to ${next.kind} ${LocationRedactor.redact(next.url)}")
+            showPersistentStatus("Source refused the stream — trying a backup…")
+            startPlayback(restorePositionMs)
+            return
+        }
+        // No backup address, but another quality of the same episode is another address.
+        val alternative = activeQualityVariants().firstOrNull { it.uri != request?.uri }
+        if (alternative != null) {
+            Log.w(TAG, "Refusal notice - trying quality ${alternative.label}")
+            showPersistentStatus("Source refused the stream — trying ${alternative.label}…")
+            switchToExternalQuality(alternative)
+        }
     }
 
     private fun armFirstFrameWatchdog() {
