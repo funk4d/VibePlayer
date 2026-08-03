@@ -1224,34 +1224,39 @@ class PlaybackActivity : Activity() {
             "Source returned ${duration}ms of media - too short for a title; " +
                 "this is what a refusal notice looks like source=${request?.sourceName ?: "unknown"}",
         )
-        // The same address refused a moment ago often serves the real stream on a second
-        // ask, which is what retrying by hand in Lampa does. Bounded, and spaced out - the
-        // point is to survive a refusal, not to badger the source.
-        if (stubRetries < MAX_STUB_RETRIES) {
-            stubRetries += 1
-            val position = (player?.currentPosition ?: restorePositionMs)
-                .takeIf { it > STUB_MEDIA_MAX_MS } ?: restorePositionMs
-            Log.w(TAG, "Refusal notice - asking again (${stubRetries}/$MAX_STUB_RETRIES)")
-            showPersistentStatus("Source refused the stream — asking again…")
-            releasePlayer()
-            mainHandler.postDelayed({ if (isStarted) startPlayback(position) }, STUB_RETRY_DELAY_MS)
+        // Three goes at getting real media, then whatever arrives is what the viewer sees.
+        // Each go prefers an address we have not tried: a backup the source shipped, then
+        // another quality, and only failing those the same address again - which is what
+        // retrying by hand in Lampa does, and it often works.
+        if (stubRetries >= MAX_STUB_RETRIES) {
+            Log.w(TAG, "Refusal notice - out of attempts, showing what arrived")
             return
         }
+        stubRetries += 1
+        val attempt = "${stubRetries + 1}/${MAX_STUB_RETRIES + 1}"
 
-        val next = sourceLadder?.next(SourceFailure.UNAVAILABLE)
-        if (next != null) {
-            Log.w(TAG, "Refusal notice - moving to ${next.kind} ${LocationRedactor.redact(next.url)}")
+        val backup = sourceLadder?.next(SourceFailure.UNAVAILABLE)
+        if (backup != null) {
+            Log.w(TAG, "Refusal notice - attempt $attempt via ${backup.kind}")
             showPersistentStatus("Source refused the stream — trying a backup…")
             startPlayback(restorePositionMs)
             return
         }
-        // No backup address, but another quality of the same episode is another address.
+
         val alternative = activeQualityVariants().firstOrNull { it.uri != request?.uri }
         if (alternative != null) {
-            Log.w(TAG, "Refusal notice - trying quality ${alternative.label}")
+            Log.w(TAG, "Refusal notice - attempt $attempt via quality ${alternative.label}")
             showPersistentStatus("Source refused the stream — trying ${alternative.label}…")
             switchToExternalQuality(alternative)
+            return
         }
+
+        val position = (player?.currentPosition ?: restorePositionMs)
+            .takeIf { it > STUB_MEDIA_MAX_MS } ?: restorePositionMs
+        Log.w(TAG, "Refusal notice - attempt $attempt asking the same address again")
+        showPersistentStatus("Source refused the stream — asking again…")
+        releasePlayer()
+        mainHandler.postDelayed({ if (isStarted) startPlayback(position) }, STUB_RETRY_DELAY_MS)
     }
 
     private fun armFirstFrameWatchdog() {
