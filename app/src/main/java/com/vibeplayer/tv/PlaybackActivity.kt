@@ -747,23 +747,9 @@ class PlaybackActivity : Activity() {
 
     private fun voicesForCurrentEpisode(): Map<String, List<QualityVariant>> {
         val current = selectedEpisodeInfo
-        val inSeason = request?.qualityVariants.orEmpty().filter {
-            it.episode?.voice != null && it.episode.season == (current?.season ?: it.episode.season)
-        }
-        val byVoice = inSeason
+        val byVoice = (current?.let { episodeVariants(it.season, it.episode) } ?: emptyList())
+            .filter { it.episode?.voice != null }
             .groupBy { requireNotNull(it.episode?.voice) }
-            .mapValues { (_, entries) ->
-                // Prefer the episode being watched; a voice that lacks it still belongs in the
-                // list, pointing at the nearest episode it does carry.
-                val wanted = current?.episode
-                val exact = entries.filter { it.episode?.episode == wanted }
-                exact.ifEmpty {
-                    wanted?.let { target ->
-                        entries.minByOrNull { kotlin.math.abs((it.episode?.episode ?: 0) - target) }
-                            ?.let(::listOf)
-                    } ?: entries
-                }
-            }
         if (byVoice.isNotEmpty()) return foldVoiceAliases(byVoice)
 
         // Sources without episodes still offer plain voiceover variants of one stream.
@@ -871,13 +857,22 @@ class PlaybackActivity : Activity() {
         }.toTypedArray()
         showDialog(getString(R.string.episode), labels) { index ->
             val variants = groups.getValue(episodeNumbers[index])
-            chooseBestVariant(variants)?.let(::switchToEpisode)
+            val inCurrentVoice = variants.filter(::matchesSelectedVoice)
+            val chosen = inCurrentVoice.ifEmpty {
+                val fallback = variants.firstOrNull()?.episode?.voice
+                if (fallback != null) {
+                    Log.i(TAG, "Voice ${selectedVoiceoverLabel ?: "none"} lacks this episode; using $fallback")
+                    selectedVoiceoverLabel = fallback
+                }
+                variants
+            }
+            chooseBestVariant(chosen)?.let(::switchToEpisode)
         }
     }
 
     private fun episodeGroups(season: Int): Map<Int, List<QualityVariant>> = request?.qualityVariants
         .orEmpty()
-        .filter { it.episode?.season == season && matchesSelectedVoice(it) }
+        .filter { it.episode?.season == season }
         .groupBy { requireNotNull(it.episode).episode }
 
     /** Entries in the voice being watched, or all of them when the source names no voices. */
