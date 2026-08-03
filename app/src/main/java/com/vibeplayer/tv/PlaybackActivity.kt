@@ -87,6 +87,7 @@ class PlaybackActivity : Activity() {
     private var seekIntervalMs = DEFAULT_SEEK_MS
     private var audioOffsetMs = 0
     private var restorePlayFocusBackground = false
+    private var shortMediaReported = false
 
     private val hideStatus = Runnable { statusText.visibility = View.GONE }
     private val hideControls = Runnable {
@@ -366,6 +367,7 @@ class PlaybackActivity : Activity() {
         val source = sourceLadder?.current ?: return
         releasePlayer()
         firstFrameRendered = false
+        shortMediaReported = false
         currentVideoIsDolbyVision = false
         unsupportedVideoMessage = null
         oversizedAv1WarningLogged = false
@@ -1095,6 +1097,24 @@ class PlaybackActivity : Activity() {
         finish()
     }
 
+    /**
+     * Sources answer a refused request with a few seconds of "error notice" video rather than
+     * an HTTP failure, so the player has no way to tell it apart from real media. A duration
+     * this short for something launched as a film or an episode is that notice, and saying so
+     * in the log turns a silent mystery into one grep.
+     */
+    private fun reportSuspiciouslyShortMedia() {
+        if (shortMediaReported) return
+        val duration = player?.duration ?: return
+        if (duration <= 0L || duration > STUB_MEDIA_MAX_MS) return
+        shortMediaReported = true
+        Log.w(
+            TAG,
+            "Source returned ${duration}ms of media - too short for a title; " +
+                "this is what a refusal notice looks like source=${request?.sourceName ?: "unknown"}",
+        )
+    }
+
     private fun armFirstFrameWatchdog() {
         val activePlayer = player ?: return
         if (firstFrameRendered || !currentVideoIsDolbyVision || recovery.attempt != PlaybackAttempt.NATIVE) return
@@ -1172,6 +1192,7 @@ class PlaybackActivity : Activity() {
                     unsupportedVideoMessage?.let(::showPersistentStatus)
                         ?: run { statusText.visibility = View.GONE }
                     armFirstFrameWatchdog()
+                    reportSuspiciouslyShortMedia()
                 }
                 Player.STATE_ENDED -> {
                     showPersistentStatus("Playback ended")
@@ -1393,6 +1414,7 @@ class PlaybackActivity : Activity() {
         const val TIMELINE_STEPS = 100L
         const val FIRST_FRAME_TIMEOUT_MS = 7_000L
         const val STATUS_TIMEOUT_MS = 2_500L
+        const val STUB_MEDIA_MAX_MS = 60_000L
         const val CONTROLS_TIMEOUT_MS = 8_000L
         const val PROGRESS_UPDATE_MS = 500L
         const val MAX_SOFTWARE_AV1_WIDTH = 1920

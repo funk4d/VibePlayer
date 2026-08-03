@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.10.0';
+    var BRIDGE_VERSION = '0.11.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -131,6 +131,8 @@
             headers.Referer = validOrigin + '/';
         }
         if (userAgent) headers['User-Agent'] = userAgent;
+        var language = window.navigator && nonEmptyString(window.navigator.language);
+        if (language) headers['Accept-Language'] = language;
         return headers;
     }
 

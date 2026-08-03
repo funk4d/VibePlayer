@@ -142,6 +142,26 @@ Rebuild the ladder whenever the playing URL changes — new intent, quality swit
 
 Never probe a source to answer these questions. No HEAD requests, no speculative GETs, no polling, no retry loops. Sources rate-limit and ban by IP, and a diagnostic request storm has already cost this project access once. Everything above is derived from information Media3 reports about loads that happened anyway.
 
+## Reach the source the same way the WebView did
+
+Balancers hand out stream addresses as opaque single-use tokens bound to the client they were
+issued to, and they refuse a mismatch by serving a few seconds of notice video rather than an
+HTTP error. Playback then "works" and the log shows a real decode of a `duration=7000ms` title.
+Treat a duration that short on a film or an episode as a refusal and say so in the log.
+
+The token is issued to whatever address the WebView presented. An external player that resolves
+differently arrives as a different client:
+
+- Resolve both address families. A DNS-over-HTTPS resolver pinned to IPv4 while the host also
+  publishes AAAA records puts the player on a different public address than the WebView, which
+  is exactly a token mismatch. Log the family each media host was reached over.
+- Carry the browser context forward — user agent, origin, referer, language — and let anything
+  the source itself supplied win over it.
+- Never add a second value for a header the data source already sets.
+
+Confirm which of these is at fault from the device log before changing any of them; the visible
+symptom is identical for all three.
+
 ## Define what "all content" means
 
 Treat "open all content" as a measured coverage target for the user's catalog, not as a physically impossible promise to decode every media format ever made. Media3 extracts many containers, but actual sample decoding still depends on RTD2851. A single 4K Dolby Vision Profile 5 stream with no backward-compatible base layer and no alternate rendition cannot be converted to HDR10/SDR in real time by this Android 9 television.

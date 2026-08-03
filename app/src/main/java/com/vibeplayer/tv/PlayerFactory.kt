@@ -2,6 +2,7 @@ package com.vibeplayer.tv
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -85,12 +86,17 @@ internal object PlayerFactory {
             .client(bootstrapClient)
             .url("https://cloudflare-dns.com/dns-query".toHttpUrl())
             .bootstrapDnsHosts(CLOUDFLARE_DNS_ADDRESSES)
-            .includeIPv6(false)
+            // Sources hand out stream tokens bound to the address they saw. The WebView that
+            // obtained the token resolves normally and may well reach the host over IPv6, so
+            // an IPv4-only player arrives with a different client address and gets refused.
+            // Resolve the same way the browser does and the two stay on one address.
+            .includeIPv6(true)
             .post(true)
             .resolvePrivateAddresses(true)
             .build()
         val httpClient = bootstrapClient.newBuilder()
             .dns(dnsOverHttps)
+            .eventListener(ConnectionLogger)
             .build()
 
         // OkHttpDataSource applies its own user agent with addHeader(), after the request
@@ -132,7 +138,30 @@ internal object PlayerFactory {
             .build()
     }
 
-    private const val FALLBACK_USER_AGENT = "VibePlayer/0.21 (TCL EP680; Android 9)"
+    private const val FALLBACK_USER_AGENT = "VibePlayer/0.24 (TCL EP680; Android 9)"
+
+    /**
+     * Reports which address family each media host was actually reached over, once per host.
+     * A token issued to one family and redeemed from the other is exactly the failure this
+     * exists to make visible; host names and server addresses are not user data.
+     */
+    private object ConnectionLogger : okhttp3.EventListener() {
+        private val reported = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+        override fun connectEnd(
+            call: okhttp3.Call,
+            inetSocketAddress: java.net.InetSocketAddress,
+            proxy: java.net.Proxy,
+            protocol: okhttp3.Protocol?,
+        ) {
+            val host = call.request().url.host
+            val address = inetSocketAddress.address ?: return
+            val family = if (address is java.net.Inet6Address) "IPv6" else "IPv4"
+            if (reported.add("$host/$family")) {
+                Log.i("VibePlayer", "Connected $host over $family (${address.hostAddress})")
+            }
+        }
+    }
 
     private val CLOUDFLARE_DNS_ADDRESSES = listOf(
         InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)),
