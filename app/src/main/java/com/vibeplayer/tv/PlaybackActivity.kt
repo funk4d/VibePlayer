@@ -395,9 +395,27 @@ class PlaybackActivity : Activity() {
     }
 
     private fun startPlayback(positionMs: Long) {
+        val hadPlayer = player != null
+        releasePlayer()
+        mainHandler.removeCallbacks(startPlaybackRunnable)
+        // This television releases its video decoder asynchronously, and a new one started
+        // before the old has let go of the hardware decodes into garbage - torn macroblocks
+        // and colour noise over a perfectly good stream. Switching quality or episode
+        // recreates the player, so give the decoder a moment to actually go away.
+        if (hadPlayer) {
+            pendingPlaybackPositionMs = positionMs
+            mainHandler.postDelayed(startPlaybackRunnable, DECODER_SETTLE_MS)
+        } else {
+            beginPlayback(positionMs)
+        }
+    }
+
+    private var pendingPlaybackPositionMs = 0L
+    private val startPlaybackRunnable = Runnable { beginPlayback(pendingPlaybackPositionMs) }
+
+    private fun beginPlayback(positionMs: Long) {
         val activeRequest = request ?: return
         val source = sourceLadder?.current ?: return
-        releasePlayer()
         firstFrameRendered = false
         shortMediaReported = false
         currentVideoCodec = null
@@ -439,6 +457,7 @@ class PlaybackActivity : Activity() {
     }
 
     private fun releasePlayer() {
+        mainHandler.removeCallbacks(startPlaybackRunnable)
         mainHandler.removeCallbacks(firstFrameWatchdog)
         mainHandler.removeCallbacks(hideStatus)
         if (::playerView.isInitialized) playerView.player = null
@@ -1680,6 +1699,7 @@ class PlaybackActivity : Activity() {
         const val MAX_RAW_LABEL_LENGTH = 70
         const val CONTROLS_TIMEOUT_MS = 8_000L
         const val PROGRESS_UPDATE_MS = 500L
+        const val DECODER_SETTLE_MS = 250L
         const val MAX_SOFTWARE_AV1_WIDTH = 1920
         const val MAX_SOFTWARE_AV1_HEIGHT = 1080
         const val WATCHED_EPISODE_PERCENT = 90
