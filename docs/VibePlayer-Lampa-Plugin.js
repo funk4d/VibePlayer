@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.18.0';
+    var BRIDGE_VERSION = '0.19.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -603,21 +603,24 @@
         if (!folder || typeof folder !== 'object') return [];
         var items = [];
 
-        function collect(value, depth) {
+        function collect(value, depth, voice) {
             if (items.length >= MAX_SOURCE_ITEMS || !value || typeof value !== 'object') return;
             if (Array.isArray(value)) {
                 value.forEach(function (entry) {
-                    if (entry && typeof entry === 'object' && itemStream(entry)) {
-                        if (items.length < MAX_SOURCE_ITEMS) items.push(entry);
-                    }
+                    if (!entry || typeof entry !== 'object' || !itemStream(entry)) return;
+                    if (!nonEmptyString(entry.voice_name) && voice) entry.voice_name = voice;
+                    if (items.length < MAX_SOURCE_ITEMS) items.push(entry);
                 });
                 return;
             }
             if (depth > 2) return;
-            Object.keys(value).forEach(function (key) { collect(value[key], depth + 1); });
+            Object.keys(value).forEach(function (key) {
+                // The first level of the folder is the voice name itself.
+                collect(value[key], depth + 1, depth === 0 ? key : voice);
+            });
         }
 
-        collect(folder, 0);
+        collect(folder, 0, null);
         return items;
     }
 

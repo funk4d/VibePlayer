@@ -111,14 +111,14 @@ assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
 assert.equal(forwarded.headers['Accept-Language'], 'uk-UA');
-assert.equal(context.window.VibePlayerBridge.version, '0.18.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.19.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 8);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.18.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.19.0'));
 
 forwardedPayload = null;
 assert.equal(

@@ -715,6 +715,27 @@ class PlaybackActivity : Activity() {
             it.episode?.season == season && it.episode.episode == episode
         }
 
+    private fun voiceKey(name: String): String {
+        val bracketed = Regex("\\(([^)]{2,})\\)").find(name)?.groupValues?.get(1)
+        return (bracketed ?: name).lowercase().filter(Char::isLetterOrDigit)
+    }
+
+    private fun <T> foldVoiceAliases(groups: Map<String, List<T>>): Map<String, List<T>> {
+        val byKey = LinkedHashMap<String, Pair<String, MutableList<T>>>()
+        groups.forEach { (name, entries) ->
+            val key = voiceKey(name).ifEmpty { name.lowercase() }
+            val existing = byKey[key]
+            if (existing == null) {
+                byKey[key] = name to entries.toMutableList()
+            } else {
+                existing.second.addAll(entries)
+                // Keep the shorter spelling: it is the name, the longer one repeats it.
+                if (name.length < existing.first.length) byKey[key] = name to existing.second
+            }
+        }
+        return byKey.values.associate { (name, entries) -> name to entries.toList() }
+    }
+
     private fun voicesForCurrentEpisode(): Map<String, List<QualityVariant>> {
         val current = selectedEpisodeInfo
         val episodeGroups = if (current != null) {
@@ -725,12 +746,14 @@ class PlaybackActivity : Activity() {
         val byVoice = episodeGroups
             .filter { it.episode?.voice != null }
             .groupBy { requireNotNull(it.episode?.voice) }
-        if (byVoice.isNotEmpty()) return byVoice
+        if (byVoice.isNotEmpty()) return foldVoiceAliases(byVoice)
 
         // Sources without episodes still offer plain voiceover variants of one stream.
-        return request?.qualityVariants.orEmpty()
-            .filter { it.voiceoverLabel != null && it.episode == null }
-            .groupBy { requireNotNull(it.voiceoverLabel) }
+        return foldVoiceAliases(
+            request?.qualityVariants.orEmpty()
+                .filter { it.voiceoverLabel != null && it.episode == null }
+                .groupBy { requireNotNull(it.voiceoverLabel) },
+        )
     }
 
     private fun showVoiceoverDialog() {
@@ -843,7 +866,7 @@ class PlaybackActivity : Activity() {
     private fun matchesSelectedVoice(variant: QualityVariant): Boolean {
         val voice = variant.episode?.voice ?: return true
         val selected = selectedVoiceoverLabel ?: return true
-        return voice == selected
+        return voiceKey(voice) == voiceKey(selected)
     }
 
     private fun updateSeriesControlsVisibility() {
@@ -866,7 +889,10 @@ class PlaybackActivity : Activity() {
         val info = selectedEpisodeInfo ?: return
         seasonButton.text = "Season ${info.season}  ▾"
         episodeButton.text = "Episode ${info.episode}  ▾"
-        episodeTitleText.text = info.title.orEmpty()
+        episodeTitleText.text = listOfNotNull(
+            "S${info.season}E${info.episode}",
+            info.title?.trim()?.takeIf(String::isNotEmpty),
+        ).joinToString(" · ")
     }
 
     private fun attachFocusPulse(vararg views: View) {
@@ -1027,15 +1053,7 @@ class PlaybackActivity : Activity() {
         val buffering = activePlayer?.playbackState == Player.STATE_BUFFERING
         val controlsVisible = controlsPanel.visibility == View.VISIBLE
         val activeRequest = request
-        val title = listOfNotNull(
-            activeRequest?.title?.trim()?.takeIf(String::isNotEmpty),
-            selectedEpisodeInfo?.let { episode ->
-                listOfNotNull(
-                    "S${episode.season}E${episode.episode}",
-                    episode.title?.trim()?.takeIf(String::isNotEmpty),
-                ).joinToString(" · ")
-            },
-        ).joinToString(" — ")
+        val title = activeRequest?.title?.trim().orEmpty()
         playbackTitle.text = title
         playbackTitleGroup.visibility = if (controlsVisible && title.isNotEmpty()) View.VISIBLE else View.GONE
         val source = activeRequest?.sourceName?.trim().orEmpty()
