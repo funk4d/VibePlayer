@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.13.0';
+    var BRIDGE_VERSION = '0.14.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -138,6 +138,9 @@
         if (userAgent) headers['User-Agent'] = userAgent;
         var language = window.navigator && nonEmptyString(window.navigator.language);
         if (language) headers['Accept-Language'] = language;
+        // Headers reach the player; labels added to data.quality may not. This is the one
+        // channel that reliably answers "which bridge is actually loaded on the device".
+        headers['X-Vibe-Bridge'] = BRIDGE_VERSION;
         return headers;
     }
 

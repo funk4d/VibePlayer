@@ -331,6 +331,16 @@ class PlaybackActivity : Activity() {
         } else {
             // Structural counts only: this is the one signal that says whether the Lampa
             // bridge is alive and what it managed to serialize. Never log URLs or headers.
+            // The labels exactly as they arrived, before any parsing. Distinguishes "the
+            // bridge sent nothing" from "the player understood nothing"; labels carry titles
+            // and episode numbers, never addresses.
+            Log.i(
+                TAG,
+                "Raw quality labels=" + intent.getStringArrayExtra("quality_levels")
+                    ?.take(RAW_LABEL_LOG_LIMIT)
+                    ?.joinToString(" ¦ ") { it.take(MAX_RAW_LABEL_LENGTH) }
+                    .orEmpty().ifEmpty { "(none)" },
+            )
             val variants = activeRequest.qualityVariants
             Log.i(
                 TAG,
@@ -340,7 +350,8 @@ class PlaybackActivity : Activity() {
                     "episodes=${variants.count { it.episode != null }} " +
                     "voiceovers=${variants.mapNotNull { it.voiceoverLabel }.distinct().size} " +
                     "reserves=${activeRequest.reserveUrls.size} " +
-                    "capture=${activeRequest.bridgeProbe ?: "none"}]",
+                    "capture=${activeRequest.bridgeProbe ?: "none"} " +
+                    "plugin=${HeaderParser.valueOf(activeRequest.headers, "X-Vibe-Bridge") ?: "unknown"}]",
             )
         }
     }
@@ -1423,6 +1434,8 @@ class PlaybackActivity : Activity() {
         const val FIRST_FRAME_TIMEOUT_MS = 7_000L
         const val STATUS_TIMEOUT_MS = 2_500L
         const val STUB_MEDIA_MAX_MS = 60_000L
+        const val RAW_LABEL_LOG_LIMIT = 14
+        const val MAX_RAW_LABEL_LENGTH = 70
         const val CONTROLS_TIMEOUT_MS = 8_000L
         const val PROGRESS_UPDATE_MS = 500L
         const val MAX_SOFTWARE_AV1_WIDTH = 1920
