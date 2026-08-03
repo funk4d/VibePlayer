@@ -91,6 +91,7 @@ class PlaybackActivity : Activity() {
     private var shortMediaReported = false
     private var stubRetries = 0
     private var playingLaunchedStream = true
+    private var resolvedEpisodeQualities: List<QualityVariant> = emptyList()
 
     private val hideStatus = Runnable { statusText.visibility = View.GONE }
     private val hideControls = Runnable {
@@ -315,6 +316,7 @@ class PlaybackActivity : Activity() {
             recovery.reset()
             stubRetries = 0
             playingLaunchedStream = true
+            resolvedEpisodeQualities = emptyList()
             val active = request
             val selectedVariant = active?.qualityVariants?.firstOrNull { it.uri == active.uri }
             selectedQualityLabel = selectedVariant?.label
@@ -855,6 +857,8 @@ class PlaybackActivity : Activity() {
             return emptyList()
         }
 
+        if (resolvedEpisodeQualities.isNotEmpty()) return resolvedEpisodeQualities
+
         val current = selectedEpisodeInfo ?: return emptyList()
         return variants.filter {
             it.episode?.season == current.season &&
@@ -1218,7 +1222,69 @@ class PlaybackActivity : Activity() {
             selectedVoiceoverLabel?.takeIf { resumeAt != null }
                 ?: "Season ${episode.season} · Episode ${episode.episode}",
         )
-        startPlayback(resumeAt ?: episode.resumePositionMs)
+        resolvedEpisodeQualities = emptyList()
+        val position = resumeAt ?: episode.resumePositionMs
+        val endpoint = episode.resolveUrl
+        if (endpoint == null) {
+            startPlayback(position)
+            return
+        }
+        resolveEpisodeThenPlay(endpoint, episode, position)
+    }
+
+    /**
+     * Asks the source for this episode's per-quality addresses before playing it.
+     *
+     * Only the default address travels with an episode; the rest are handed out on request,
+     * which is what Lampa does when the viewer picks an episode there. Without asking, an
+     * episode chosen here plays at whatever the source calls default - 4K AV1 on a television
+     * that has no decoder for it. One request, for the episode actually chosen, kept for the
+     * rest of the session.
+     */
+    private fun resolveEpisodeThenPlay(endpoint: String, episode: EpisodeVariantInfo, positionMs: Long) {
+        val headers = request?.headers.orEmpty()
+        EpisodeResolver.cached(endpoint)?.let { known ->
+            applyResolvedEpisode(known, episode, positionMs)
+            return
+        }
+        showPersistentStatus("Loading episode…")
+        Thread {
+            val resolved = EpisodeResolver.resolve(endpoint, headers)
+            mainHandler.post {
+                if (selectedEpisodeInfo?.key != episode.key) return@post
+                if (resolved == null) {
+                    Log.w(TAG, "Episode did not resolve; playing the address it came with")
+                    startPlayback(positionMs)
+                } else {
+                    applyResolvedEpisode(resolved, episode, positionMs)
+                }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun applyResolvedEpisode(
+        resolved: EpisodeResolver.Resolved,
+        episode: EpisodeVariantInfo,
+        positionMs: Long,
+    ) {
+        resolvedEpisodeQualities = resolved.qualities.mapNotNull { (label, url) ->
+            val uri = runCatching { android.net.Uri.parse(url) }.getOrNull() ?: return@mapNotNull null
+            QualityVariant(label = label, uri = uri, episode = episode)
+        }
+        val wanted = chooseBestVariant(resolvedEpisodeQualities)
+        val target = wanted?.uri ?: resolved.defaultUrl?.let(android.net.Uri::parse)
+        if (target != null) {
+            request = request?.copy(uri = target)
+            selectedQualityLabel = wanted?.label ?: selectedQualityLabel
+            resetSourceLadder()
+        }
+        Log.i(
+            TAG,
+            "Episode resolved qualities=${resolvedEpisodeQualities.map { it.label }} " +
+                "playing=${selectedQualityLabel ?: "default"}",
+        )
+        updateSeriesControlsUi()
+        startPlayback(positionMs)
     }
 
     /**

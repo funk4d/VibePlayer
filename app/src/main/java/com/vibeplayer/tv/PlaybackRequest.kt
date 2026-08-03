@@ -134,6 +134,8 @@ internal data class EpisodeVariantInfo(
     val voice: String? = null,
     /** How Lampa identifies this episode in its own timeline. */
     val timelineHash: String? = null,
+    /** Where this episode's per-quality addresses can be asked for, when it has more. */
+    val resolveUrl: String? = null,
 )
 
 internal data class BridgeMetadata(
@@ -274,7 +276,7 @@ internal object QualityVariantParser {
     }
 
     private fun parseEpisodeLabel(rawLabel: String): ParsedVariantLabel {
-        val parts = rawLabel.removePrefix(EPISODE_PREFIX).split('|', limit = 8)
+        val parts = rawLabel.removePrefix(EPISODE_PREFIX).split('|', limit = 9)
         if (parts.size < 6) return ParsedVariantLabel(rawLabel)
         return runCatching {
             val season = parts[0].toInt().coerceAtLeast(0)
@@ -290,9 +292,14 @@ internal object QualityVariantParser {
             val hash = parts.getOrNull(7)
                 ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
                 ?.ifEmpty { null }
+            val resolveUrl = parts.getOrNull(8)
+                ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
+                ?.takeIf { it.startsWith("http", ignoreCase = true) }
             ParsedVariantLabel(
                 quality = quality,
-                episode = EpisodeVariantInfo(season, episodeNumber, title, percent, positionMs, voice, hash),
+                episode = EpisodeVariantInfo(
+                    season, episodeNumber, title, percent, positionMs, voice, hash, resolveUrl,
+                ),
             )
         }.getOrElse { ParsedVariantLabel(rawLabel) }
     }

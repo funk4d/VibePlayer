@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.23.0';
+    var BRIDGE_VERSION = '0.24.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -369,7 +369,13 @@
             encodeURIComponent(plainText(item && item.voice_name) || ''),
             // Lampa identifies an episode in its timeline by this hash. The player reports
             // progress against it for episodes chosen after launch.
-            encodeURIComponent(nonEmptyString(timeline.hash) || '')
+            encodeURIComponent(nonEmptyString(timeline.hash) || ''),
+            // Where this episode's per-quality addresses can be asked for. The source keeps
+            // one default address per episode and hands out the rest only on request, which
+            // is what Lampa does when the viewer picks an episode.
+            encodeURIComponent(
+                (item && item.method === 'call' && nonEmptyString(item.url)) || ''
+            )
         ];
         return EPISODE_PREFIX + fields.join('|');
     }

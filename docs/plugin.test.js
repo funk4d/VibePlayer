@@ -111,7 +111,7 @@ assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
 assert.equal(forwarded.headers['Accept-Language'], 'uk-UA');
-assert.equal(context.window.VibePlayerBridge.version, '0.23.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.24.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 8);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
@@ -120,7 +120,7 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.23.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.24.0'));
 
 forwardedPayload = null;
 assert.equal(
