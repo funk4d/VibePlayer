@@ -107,14 +107,14 @@ assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
 assert.equal(forwarded.headers['Accept-Language'], 'uk-UA');
-assert.equal(context.window.VibePlayerBridge.version, '0.14.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.15.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 8);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.14.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.15.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -160,6 +160,13 @@ assert.equal(episode.url_reserve, undefined);
 // Card-level context still travels: the title and the playlist describe the whole series.
 assert.equal(episode.title, 'The Series');
 assert.equal(episode.playlist.length, 1);
+
+// Lampa reads the current playlist entry's quality map, not the payload's top level, so
+// the labels have to be present on that entry too.
+const mirroredEntry = episode.playlist.find((item) => item.season === 1 && item.episode === 2);
+const mirroredLabels = Object.keys(mirroredEntry.quality).filter((l) => l.startsWith('@VIBE'));
+assert(mirroredLabels.length > 0, 'labels must be mirrored onto the launched playlist entry');
+assert.equal(mirroredEntry.quality['1080p'], 'https://media.example/s01e02-1080.m3u8');
 
 // A launch that belongs to no captured entry is enriched with nothing at all.
 forwardedPayload = null;

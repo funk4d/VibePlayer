@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.14.0';
+    var BRIDGE_VERSION = '0.15.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -120,6 +120,36 @@
 
     function encodePayload(originalPayload, data) {
         return typeof originalPayload === 'string' ? JSON.stringify(data) : data;
+    }
+
+    /**
+     * Mirror our labels onto the playlist entry being launched.
+     *
+     * Lampa builds the Intent's quality arrays from the *current playlist item's* quality
+     * map, not from the payload's top-level one. With a playlist present the top level is
+     * never read, so labels written only there reach the player as nothing at all.
+     */
+    function mirrorLabelsOntoCurrentItem(data, link) {
+        var playlist = Array.isArray(data.playlist) ? data.playlist : null;
+        var qualities = data.quality;
+        if (!playlist || !qualities || typeof qualities !== 'object') return 0;
+
+        var expectedUrl = streamUrl(link) || streamUrl(data);
+        var current = null;
+        for (var index = 0; index < playlist.length && !current; index += 1) {
+            if (ownsStreamUrl(playlist[index], expectedUrl)) current = playlist[index];
+        }
+        if (!current) return 0;
+
+        var merged = Object.assign({}, current.quality || {});
+        var mirrored = 0;
+        Object.keys(qualities).forEach(function (label) {
+            if (!isBridgeLabel(label)) return;
+            merged[label] = qualities[label];
+            mirrored += 1;
+        });
+        if (mirrored) current.quality = merged;
+        return mirrored;
     }
 
     function browserContextHeaders() {
@@ -648,6 +678,7 @@
                     stats.metadata = serializeMetadata(link, data, stats.captured);
                     stats.voiceovers = serializeVoiceovers(data);
                     stats.episodes = serializeEpisodes(data);
+                    stats.mirrored = mirrorLabelsOntoCurrentItem(data, link);
                 }
             } catch (error) {
                 console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
