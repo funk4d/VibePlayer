@@ -60,6 +60,7 @@ const captured = {
     playlist: [{
         season: 1,
         episode: 2,
+        voice_name: 'Dub <span style="color:red">HD</span>',
         title: 'Second Episode',
         timeline: { percent: 94, time: 122 },
         quality: {
@@ -86,6 +87,9 @@ assert(labels.includes('1080p'));
 assert(labels.some((label) => label.startsWith('@VIBEMETA@The%20Series|Alloha')));
 assert(labels.some((label) => label.startsWith('@VIBEVOICE@Dub|720p')));
 assert(labels.some((label) => label.startsWith('@VIBEEPISODE@1|2|94|122|Second%20Episode|1080p')));
+// Markup from the page must never reach the player's overlay.
+const episodeLabel = labels.find((label) => label.startsWith('@VIBEEPISODE@1|2|'));
+assert.equal(episodeLabel.split('|')[6], 'Dub%20HD');
 
 // Reserves ride along in source order, the one matching the playing quality first,
 // and the primary address is never repeated as its own backup.
@@ -107,14 +111,14 @@ assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
 assert.equal(forwarded.headers['Accept-Language'], 'uk-UA');
-assert.equal(context.window.VibePlayerBridge.version, '0.15.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.16.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 8);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.15.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.16.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -178,7 +182,7 @@ const unrelated = JSON.parse(forwardedPayload);
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 // Only the diagnostic label, carrying no title, no source and no stream of its own.
-assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f9']);
+assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f9|0|0|']);
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
 // 9 top-level fields. It must never carry anything resembling a URL.

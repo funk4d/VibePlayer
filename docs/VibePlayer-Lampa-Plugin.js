@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.15.0';
+    var BRIDGE_VERSION = '0.16.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -21,6 +21,26 @@
         return typeof value === 'string' && value.trim() ? value.trim() : null;
     }
 
+    /**
+     * Source and voice names are built for a web page, so they arrive carrying markup and
+     * entities - "Alloha [+UA] <span style=...>" and the like. An external player renders
+     * plain text, so strip the markup rather than showing it.
+     */
+    function plainText(value) {
+        var text = nonEmptyString(value);
+        if (!text) return null;
+        return nonEmptyString(
+            text.replace(/<[^>]*>/g, ' ')
+                .replace(/&nbsp;/gi, ' ')
+                .replace(/&amp;/gi, '&')
+                .replace(/&lt;/gi, '<')
+                .replace(/&gt;/gi, '>')
+                .replace(/&quot;/gi, '"')
+                .replace(/&#(\d{1,6});/g, function (whole, code) { return String.fromCharCode(parseInt(code, 10)); })
+                .replace(/\s+/g, ' ')
+        );
+    }
+
     function streamUrl(value) {
         var direct = nonEmptyString(value);
         if (direct) return direct;
@@ -35,12 +55,12 @@
     }
 
     function displayName(value) {
-        var direct = nonEmptyString(value);
+        var direct = plainText(value);
         if (direct) return direct;
         if (!value || typeof value !== 'object') return null;
-        return nonEmptyString(value.label) ||
-            nonEmptyString(value.title) ||
-            nonEmptyString(value.name);
+        return plainText(value.label) ||
+            plainText(value.title) ||
+            plainText(value.name);
     }
 
     function firstDisplayName(values) {
@@ -76,9 +96,12 @@
         ]);
     }
 
-    function metadataLabel(title, source, probe) {
+    function metadataLabel(title, source, probe, data) {
         return METADATA_PREFIX + encodeURIComponent(title || '') + '|' +
-            encodeURIComponent(source || '') + '|' + probe;
+            encodeURIComponent(source || '') + '|' + probe + '|' +
+            integer(data && data.season, 0) + '|' +
+            integer(data && data.episode, 0) + '|' +
+            encodeURIComponent(plainText(data && data.voice_name) || '');
     }
 
     // A compact, URL-free description of what the capture actually held: matched, playlist
@@ -102,7 +125,7 @@
         Object.keys(qualities).forEach(function (label) {
             if (label.indexOf(METADATA_PREFIX) === 0) delete qualities[label];
         });
-        qualities[metadataLabel(title, source, captureProbe(matched))] = url;
+        qualities[metadataLabel(title, source, captureProbe(matched), data)] = url;
         data.quality = qualities;
         return 1;
     }
@@ -290,8 +313,11 @@
             integer(item && item.episode, 0),
             Math.max(0, Math.min(100, integer(timeline.percent, 0))),
             Math.max(0, integer(timeline.time, 0)),
-            encodeURIComponent(nonEmptyString(item && item.title) || ''),
-            encodeURIComponent(quality || 'Auto')
+            encodeURIComponent(plainText(item && item.title) || ''),
+            encodeURIComponent(quality || 'Auto'),
+            // The voice belongs to the entry: without it the player cannot answer "which
+            // voices exist for the episode I just switched to".
+            encodeURIComponent(plainText(item && item.voice_name) || '')
         ];
         return EPISODE_PREFIX + fields.join('|');
     }
@@ -310,7 +336,6 @@
         var items = allSourceItems();
         var playlist = Array.isArray(data.playlist) ? data.playlist : [];
         var qualities = Object.assign({}, data.quality || {});
-        var currentVoice = nonEmptyString(data.voice_name);
         var seen = {};
         var serialized = 0;
 
@@ -318,10 +343,8 @@
             var number = episodeNumber(item);
             var url = itemStream(item);
             if (!number || !url) return;
-            var voice = nonEmptyString(item.voice_name);
-            if (currentVoice && voice && voice !== currentVoice) return;
-
-            var key = integer(item.season, 0) + 'x' + number;
+            var voice = plainText(item.voice_name) || '';
+            var key = voice + '|' + integer(item.season, 0) + 'x' + number;
             if (seen[key]) return;
             seen[key] = true;
             qualities[episodeLabel(item, item.quality_label || 'Auto')] = url;
@@ -419,36 +442,10 @@
         return candidates.length;
     }
 
-    /**
-     * The other voices for the episode being watched. Each is an alternate stream of the
-     * same moment, which is exactly what the player's voiceover list switches between, so
-     * they carry no episode of their own.
-     */
-    function serializeSourceVoices(data, qualities) {
-        var current = nonEmptyString(data.voice_name);
-        var season = integer(data.season, 0);
-        var episode = episodeNumber(data) || integer(data.episode, 0);
-        var seen = {};
-        var serialized = 0;
-
-        allSourceItems().forEach(function (item) {
-            var voice = nonEmptyString(item.voice_name);
-            var url = itemStream(item);
-            if (!voice || !url || voice === current || seen[voice]) return;
-            // Only the same point in the series - another episode under another voice would
-            // silently jump the viewer somewhere else.
-            if (integer(item.season, 0) !== season) return;
-            if (episode && episodeNumber(item) !== episode) return;
-            seen[voice] = true;
-            serialized += addVariant(qualities, voice, item.quality_label || 'Auto', url);
-        });
-        return serialized;
-    }
-
     function serializeVoiceovers(data) {
         var voiceovers = Array.isArray(data.voiceovers) ? data.voiceovers : [];
         var qualities = Object.assign({}, data.quality || {});
-        var serialized = serializeSourceVoices(data, qualities);
+        var serialized = 0;
 
         voiceovers.forEach(function (item, index) {
             if (!item || typeof item !== 'object') return;

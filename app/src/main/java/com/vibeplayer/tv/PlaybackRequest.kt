@@ -20,6 +20,7 @@ internal data class PlaybackRequest(
     val qualityVariants: List<QualityVariant>,
     val reserveUrls: List<String> = emptyList(),
     val bridgeProbe: String? = null,
+    val currentEpisode: EpisodeVariantInfo? = null,
 ) {
     val safeLocation: String
         get() = LocationRedactor.redact(uri.toString())
@@ -66,6 +67,16 @@ internal data class PlaybackRequest(
                 qualityVariants = QualityVariantParser.fromIntent(intent),
                 reserveUrls = QualityVariantParser.reservesFromIntent(intent),
                 bridgeProbe = bridgeMetadata?.probe,
+                currentEpisode = bridgeMetadata?.episode?.let { number ->
+                    EpisodeVariantInfo(
+                        season = bridgeMetadata.season ?: 0,
+                        episode = number,
+                        title = null,
+                        watchedPercent = 0,
+                        resumePositionMs = 0L,
+                        voice = bridgeMetadata.voice,
+                    )
+                },
             )
         }
 
@@ -119,6 +130,8 @@ internal data class EpisodeVariantInfo(
     val title: String?,
     val watchedPercent: Int,
     val resumePositionMs: Long,
+    /** Which voice this particular stream of the episode is in. */
+    val voice: String? = null,
 )
 
 internal data class BridgeMetadata(
@@ -126,6 +139,11 @@ internal data class BridgeMetadata(
     val source: String?,
     /** Opaque structural summary of the bridge's capture, for logs only. */
     val probe: String? = null,
+    // What is playing right now. The launched address is the one for the chosen quality and
+    // matches no entry's own address, so the current position has to be stated outright.
+    val season: Int? = null,
+    val episode: Int? = null,
+    val voice: String? = null,
 )
 
 internal object QualityVariantParser {
@@ -227,13 +245,19 @@ internal object QualityVariantParser {
     internal fun parseMetadataLabel(rawLabel: String): BridgeMetadata? {
         val trimmed = rawLabel.trim()
         if (!trimmed.startsWith(METADATA_PREFIX)) return null
-        val parts = trimmed.removePrefix(METADATA_PREFIX).split('|', limit = 3)
+        val parts = trimmed.removePrefix(METADATA_PREFIX).split('|', limit = 6)
         if (parts.size < 2) return null
         return runCatching {
             val title = URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
             val source = URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
             val probe = parts.getOrNull(2)?.trim()?.takeIf { it.matches(PROBE_FORMAT) }
-            BridgeMetadata(title, source, probe).takeIf { it.title != null || it.source != null || probe != null }
+            val season = parts.getOrNull(3)?.trim()?.toIntOrNull()?.takeIf { it >= 0 }
+            val episode = parts.getOrNull(4)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+            val voice = parts.getOrNull(5)
+                ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
+                ?.ifEmpty { null }
+            BridgeMetadata(title, source, probe, season, episode, voice)
+                .takeIf { it.title != null || it.source != null || probe != null }
         }.getOrNull()
     }
 
@@ -248,8 +272,8 @@ internal object QualityVariantParser {
     }
 
     private fun parseEpisodeLabel(rawLabel: String): ParsedVariantLabel {
-        val parts = rawLabel.removePrefix(EPISODE_PREFIX).split('|', limit = 6)
-        if (parts.size != 6) return ParsedVariantLabel(rawLabel)
+        val parts = rawLabel.removePrefix(EPISODE_PREFIX).split('|', limit = 7)
+        if (parts.size < 6) return ParsedVariantLabel(rawLabel)
         return runCatching {
             val season = parts[0].toInt().coerceAtLeast(0)
             val episodeNumber = parts[1].toInt().coerceAtLeast(0)
@@ -258,9 +282,12 @@ internal object QualityVariantParser {
             val title = URLDecoder.decode(parts[4], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
             val quality = URLDecoder.decode(parts[5], StandardCharsets.UTF_8.name()).trim()
             require(episodeNumber > 0 && quality.isNotEmpty())
+            val voice = parts.getOrNull(6)
+                ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
+                ?.ifEmpty { null }
             ParsedVariantLabel(
                 quality = quality,
-                episode = EpisodeVariantInfo(season, episodeNumber, title, percent, positionMs),
+                episode = EpisodeVariantInfo(season, episodeNumber, title, percent, positionMs, voice),
             )
         }.getOrElse { ParsedVariantLabel(rawLabel) }
     }

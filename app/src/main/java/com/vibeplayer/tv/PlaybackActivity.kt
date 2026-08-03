@@ -308,14 +308,16 @@ class PlaybackActivity : Activity() {
         resetSourceLadder()
         if (resetRecovery) {
             recovery.reset()
-            val selectedVariant = request?.qualityVariants
-                ?.firstOrNull { it.uri == request?.uri && it.voiceoverLabel != null }
-                ?: request?.qualityVariants?.firstOrNull { it.uri == request?.uri }
+            val active = request
+            val selectedVariant = active?.qualityVariants?.firstOrNull { it.uri == active.uri }
             selectedQualityLabel = selectedVariant?.label
-            selectedVoiceoverLabel = selectedVariant?.voiceoverLabel
-            selectedEpisodeInfo = request?.qualityVariants
-                ?.firstOrNull { it.uri == request?.uri && it.episode != null }
-                ?.episode
+            // The launched address belongs to the chosen quality and equals no entry's own
+            // address, so where we are is taken from what the source stated, not guessed.
+            val stated = active?.currentEpisode
+            selectedVoiceoverLabel = stated?.voice ?: selectedVariant?.voiceoverLabel
+            selectedEpisodeInfo = stated?.let { current ->
+                episodeVariants(current.season, current.episode).firstOrNull()?.episode ?: current
+            }
             initialVoiceoverEpisodeKey = selectedEpisodeInfo?.key
         }
         updateVoiceoverButtonVisibility()
@@ -706,35 +708,49 @@ class PlaybackActivity : Activity() {
         }
     }
 
-    private fun showVoiceoverDialog() {
-        val allVariants = request?.qualityVariants.orEmpty()
-        val voiceoverGroups = allVariants
+    /** Every stream of one episode, whatever voice it is in. */
+    private fun episodeVariants(season: Int, episode: Int): List<QualityVariant> =
+        request?.qualityVariants.orEmpty().filter {
+            it.episode?.season == season && it.episode.episode == episode
+        }
+
+    private fun voicesForCurrentEpisode(): Map<String, List<QualityVariant>> {
+        val current = selectedEpisodeInfo
+        val episodeGroups = if (current != null) {
+            episodeVariants(current.season, current.episode)
+        } else {
+            emptyList()
+        }
+        val byVoice = episodeGroups
+            .filter { it.episode?.voice != null }
+            .groupBy { requireNotNull(it.episode?.voice) }
+        if (byVoice.isNotEmpty()) return byVoice
+
+        // Sources without episodes still offer plain voiceover variants of one stream.
+        return request?.qualityVariants.orEmpty()
             .filter { it.voiceoverLabel != null && it.episode == null }
             .groupBy { requireNotNull(it.voiceoverLabel) }
+    }
+
+    private fun showVoiceoverDialog() {
+        val voiceoverGroups = voicesForCurrentEpisode()
         if (voiceoverGroups.isEmpty()) {
             updateVoiceoverButtonVisibility()
             return
         }
 
-        val currentEpisodeKey = selectedEpisodeInfo?.key
-        val baseVariants = if (currentEpisodeKey == null) {
-            allVariants.filter { it.voiceoverLabel == null && it.episode == null }
-        } else {
-            allVariants.filter { it.voiceoverLabel == null && it.episode?.key == currentEpisodeKey }
-        }
-        val options = buildList<String?> {
-            if (baseVariants.isNotEmpty()) add(null)
-            addAll(voiceoverGroups.keys)
-        }
+        val options = voiceoverGroups.keys.toList()
         val labels = options.map { voiceover ->
-            val label = voiceover ?: "Selected in Lampa"
-            if (voiceover == selectedVoiceoverLabel) "✓ $label" else label
+            if (voiceover == selectedVoiceoverLabel) "✓ $voiceover" else voiceover
         }.toTypedArray()
 
         showDialog(getString(R.string.voiceover), labels) { index ->
             val selected = options[index]
-            val variants = if (selected == null) baseVariants else voiceoverGroups[selected].orEmpty()
-            chooseBestVariant(variants)?.let(::switchToExternalQuality)
+            if (selected == selectedVoiceoverLabel) return@showDialog
+            chooseBestVariant(voiceoverGroups.getValue(selected))?.let { variant ->
+                selectedVoiceoverLabel = selected
+                switchToEpisode(variant)
+            }
         }
     }
 
@@ -753,9 +769,9 @@ class PlaybackActivity : Activity() {
 
     private fun updateVoiceoverButtonVisibility() {
         if (!::voiceoverButton.isInitialized) return
-        val hasVoiceovers = request?.qualityVariants?.any {
-            it.voiceoverLabel != null && it.episode == null
-        } == true && selectedEpisodeInfo?.key == initialVoiceoverEpisodeKey
+        // A choice exists whenever the episode being watched has more than one voice, which
+        // stays true after switching episode or voice - both used to hide the button.
+        val hasVoiceovers = voicesForCurrentEpisode().size > 1
         if (!hasVoiceovers && currentFocus == voiceoverButton) audioButton.requestFocus()
         voiceoverButton.visibility = if (hasVoiceovers) View.VISIBLE else View.GONE
     }
@@ -774,6 +790,7 @@ class PlaybackActivity : Activity() {
     private fun showSeasonDialog() {
         val seasons = request?.qualityVariants
             .orEmpty()
+            .filter(::matchesSelectedVoice)
             .mapNotNull { it.episode?.season }
             .distinct()
             .sorted()
@@ -816,8 +833,15 @@ class PlaybackActivity : Activity() {
 
     private fun episodeGroups(season: Int): Map<Int, List<QualityVariant>> = request?.qualityVariants
         .orEmpty()
-        .filter { it.episode?.season == season }
+        .filter { it.episode?.season == season && matchesSelectedVoice(it) }
         .groupBy { requireNotNull(it.episode).episode }
+
+    /** Entries in the voice being watched, or all of them when the source names no voices. */
+    private fun matchesSelectedVoice(variant: QualityVariant): Boolean {
+        val voice = variant.episode?.voice ?: return true
+        val selected = selectedVoiceoverLabel ?: return true
+        return voice == selected
+    }
 
     private fun updateSeriesControlsVisibility() {
         if (!::seriesControls.isInitialized) return
@@ -1000,7 +1024,15 @@ class PlaybackActivity : Activity() {
         val buffering = activePlayer?.playbackState == Player.STATE_BUFFERING
         val controlsVisible = controlsPanel.visibility == View.VISIBLE
         val activeRequest = request
-        val title = activeRequest?.title?.trim().orEmpty()
+        val title = listOfNotNull(
+            activeRequest?.title?.trim()?.takeIf(String::isNotEmpty),
+            selectedEpisodeInfo?.let { episode ->
+                listOfNotNull(
+                    "S${episode.season}E${episode.episode}",
+                    episode.title?.trim()?.takeIf(String::isNotEmpty),
+                ).joinToString(" · ")
+            },
+        ).joinToString(" — ")
         playbackTitle.text = title
         playbackTitleGroup.visibility = if (controlsVisible && title.isNotEmpty()) View.VISIBLE else View.GONE
         val source = activeRequest?.sourceName?.trim().orEmpty()
@@ -1082,12 +1114,15 @@ class PlaybackActivity : Activity() {
         val activeRequest = request ?: return
         val episode = variant.episode ?: return
         selectedEpisodeInfo = episode
-        selectedVoiceoverLabel = null
+        // The voice belongs to the entry now, so switching an episode stays inside the voice
+        // being watched instead of dropping back to "whatever Lampa picked".
+        selectedVoiceoverLabel = episode.voice ?: selectedVoiceoverLabel
         selectedQualityLabel = variant.label
         request = activeRequest.copy(uri = variant.uri)
         resetSourceLadder()
         updateVoiceoverButtonVisibility()
         updateSeriesControlsUi()
+        updatePlaybackInfoUi()
         Log.i(
             TAG,
             "Switch episode season=${episode.season} episode=${episode.episode} " +
