@@ -49,9 +49,9 @@ internal data class PlaybackRequest(
                 mimeType = declared ?: SourceLadder.containerHint(uri.toString()),
                 mimeTypeInferred = declared == null,
                 title = cleanMetadataValue(
-                    intent.getStringExtra(Intent.EXTRA_TITLE)
-                        ?: intent.getStringExtra("title")
-                        ?: bridgeMetadata?.title,
+                    bridgeMetadata?.title
+                        ?: intent.getStringExtra(Intent.EXTRA_TITLE)
+                        ?: intent.getStringExtra("title"),
                 ),
                 sourceName = cleanMetadataValue(
                     bridgeMetadata?.source
@@ -317,7 +317,7 @@ internal object QualityVariantParser {
     private const val RESERVE_PREFIX = "@VIBERESERVE@"
 
     /** Structural counters only, so nothing from a stream URL can reach a log through here. */
-    private val PROBE_FORMAT = Regex("c[01]p\\d{1,4}v\\d{1,4}f\\d{1,4}")
+    private val PROBE_FORMAT = Regex("c[01]p\\d{1,4}v\\d{1,4}f\\d{1,4}(s\\d{1,4}w\\d{1,4})?")
 }
 
 internal object LocationRedactor {

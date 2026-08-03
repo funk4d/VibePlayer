@@ -1,7 +1,7 @@
 (function () {
     // Lampa: short public alias for the full VibePlayer bridge.
-    if (window.VibePlayerBridge && window.VibePlayerBridge.version === '0.16.0') return;
+    if (window.VibePlayerBridge && window.VibePlayerBridge.version === '0.17.0') return;
     var script = document.createElement('script');
-    script.src = 'https://funk4d.github.io/VibePlayer/VibePlayer-Lampa-Plugin.js?v=0.16.0';
+    script.src = 'https://funk4d.github.io/VibePlayer/VibePlayer-Lampa-Plugin.js?v=0.17.0';
     document.head.appendChild(script);
 })();

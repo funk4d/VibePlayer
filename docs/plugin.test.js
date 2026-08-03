@@ -111,14 +111,14 @@ assert.equal(forwarded.headers.Referer, 'http://lampa.mx/');
 assert.equal(forwarded.headers.Origin, 'http://lampa.mx');
 assert.equal(forwarded.headers['User-Agent'], 'Lampa WebView Test');
 assert.equal(forwarded.headers['Accept-Language'], 'uk-UA');
-assert.equal(context.window.VibePlayerBridge.version, '0.16.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.17.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 8);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
 assert(!logs.join('\n').includes('media.example'));
 assert(!/\bfetch\s*\(/.test(pluginSource));
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.16.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.17.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -182,14 +182,14 @@ const unrelated = JSON.parse(forwardedPayload);
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 // Only the diagnostic label, carrying no title, no source and no stream of its own.
-assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f9|0|0|']);
+assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f9s0w0|0|0|']);
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
 // 9 top-level fields. It must never carry anything resembling a URL.
 const probe = Object.keys(forwarded.quality)
     .find((label) => label.startsWith('@VIBEMETA@'))
     .split('|')[2];
-assert.match(probe, /^c1p1v1f9$/);
+assert.match(probe, /^c1p1v1f9s0w0$/);
 
 // The bridge must report itself installed, otherwise it is silently doing nothing.
 assert.equal(context.window.VibePlayerBridge.installed, true);

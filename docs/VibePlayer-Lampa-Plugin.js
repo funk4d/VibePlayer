@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.16.0';
+    var BRIDGE_VERSION = '0.17.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -71,17 +71,43 @@
         return null;
     }
 
+    function activeMovie() {
+        var Lampa = window.Lampa;
+        var activity = Lampa && Lampa.Activity && typeof Lampa.Activity.active === 'function'
+            ? Lampa.Activity.active()
+            : null;
+        return activity && activity.movie && typeof activity.movie === 'object' ? activity.movie : null;
+    }
+
     function contentTitle(data) {
+        var movie = activeMovie();
         return firstDisplayName([
-            data && data.title,
-            data && data.movie_title,
+            movie && movie.name,
+            movie && movie.title,
             data && data.card,
-            data && data.movie
+            data && data.movie,
+            data && data.movie_title,
+            data && data.title
         ]);
     }
 
+    /**
+     * Balancer names come decorated for the card: "Alloha [4K, +UA] VIP 5|5", "Eneida VIP 1|5".
+     * The badges describe the listing, not the source, and only crowd the player's overlay.
+     */
+    function trimSourceName(name) {
+        var text = plainText(name);
+        if (!text) return null;
+        return nonEmptyString(
+            text.replace(/[\[(].*?[\])]/g, ' ')
+                .replace(/\bVIP\b/gi, ' ')
+                .replace(/\b\d+\s*[|/]\s*\d+\b/g, ' ')
+                .replace(/\s+/g, ' ')
+        ) || text;
+    }
+
     function sourceName(data) {
-        return firstDisplayName([
+        return trimSourceName(firstDisplayName([
             data && data.source_name,
             data && data.provider_name,
             data && data.balancer_name,
@@ -93,7 +119,7 @@
             data && data.balancer,
             data && data.balanser,
             data && data.online
-        ]);
+        ]));
     }
 
     function metadataLabel(title, source, probe, data) {
@@ -109,10 +135,15 @@
     // this is how the bridge's own view of the payload reaches a device log at all.
     function captureProbe(matched) {
         var summary = window.VibePlayerBridge.lastCapture;
+        var source = sourceSummary();
         return 'c' + (matched ? 1 : 0) +
             'p' + summary.playlistCount +
             'v' + summary.voiceoverCount +
-            'f' + summary.fields.length;
+            'f' + summary.fields.length +
+            // What the source itself yielded: entries seen, and how many had a usable
+            // address. A balancer that serialises nothing is one of these two being zero.
+            's' + source.items +
+            'w' + source.withStream;
     }
 
     function serializeMetadata(link, data, matched) {

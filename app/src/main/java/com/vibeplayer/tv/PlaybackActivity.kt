@@ -1139,7 +1139,7 @@ class PlaybackActivity : Activity() {
         val duration = activePlayer?.duration?.takeIf { it > 0 } ?: 0L
         if (activeRequest != null) {
             val result = Intent()
-                .setData(activeRequest.uri)
+                .setData(sourceLadder?.current?.url?.let(android.net.Uri::parse) ?: activeRequest.uri)
                 .putExtra("position", position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
                 .putExtra("duration", duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             setResult(RESULT_OK, result)
