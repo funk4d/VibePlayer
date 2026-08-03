@@ -701,9 +701,20 @@ class PlaybackActivity : Activity() {
         seekForwardButton.contentDescription = "Seek forward $seconds seconds"
     }
 
+    /**
+     * A menu is a set of distinct choices. Sources that name no quality label everything
+     * "Auto", and several such entries differ only in which stream they happen to point at -
+     * six identical lines to choose between. Keep one entry per label, and prefer named
+     * qualities over unnamed ones when both describe the same thing.
+     */
+    private fun distinctQualityChoices(variants: List<QualityVariant>): List<QualityVariant> {
+        val named = variants.filter { QualityVariantParser.heightFromLabel(it.label) != null }
+        return (named.ifEmpty { variants }).distinctBy { it.label.lowercase() }
+    }
+
     private fun showQualityDialog() {
-        val variants = activeQualityVariants()
-        if (variants.isNotEmpty()) {
+        val variants = distinctQualityChoices(activeQualityVariants())
+        if (variants.size > 1) {
             val labels = variants.map { variant ->
                 if (variant.label == selectedQualityLabel) {
                     listOfNotNull("✓ ${variant.label}", currentVideoCodec).joinToString(" · ")
