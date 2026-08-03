@@ -817,28 +817,39 @@ class PlaybackActivity : Activity() {
     }
 
     /**
-     * The qualities of the stream being watched.
+     * The qualities of the stream being watched - and of nothing else.
      *
-     * The plain entries are exactly that - the source's own quality list for what is playing.
-     * Episode and voiceover entries are other streams, and belong to their own menus; the
-     * voiceover filter here once mattered because a voice was only ever known through a
-     * @VIBEVOICE@ entry, which is no longer how a voice reaches us.
+     * The plain entries describe the stream Lampa launched. Once the viewer has moved to a
+     * different episode inside the player they describe something that is no longer playing,
+     * and offering them sends the viewer back to the episode they left. When the episode in
+     * hand has no quality list of its own, the stream's own variants are the answer, which is
+     * what the track menu shows.
      */
     private fun activeQualityVariants(): List<QualityVariant> {
         val variants = request?.qualityVariants.orEmpty()
+        val current = selectedEpisodeInfo
+
+        if (current != null) {
+            val forEpisode = variants.filter {
+                it.episode?.season == current.season &&
+                    it.episode.episode == current.episode &&
+                    matchesSelectedVoice(it)
+            }
+            if (forEpisode.size > 1) return forEpisode
+
+            val launched = request?.currentEpisode
+            val stillOnLaunched = launched == null ||
+                (launched.season == current.season && launched.episode == current.episode)
+            if (!stillOnLaunched) return emptyList()
+        }
+
         val plain = variants.filter { it.voiceoverLabel == null && it.episode == null }
         if (plain.isNotEmpty()) return plain
 
         // Sources that describe every stream as a voiceover leave nothing plain behind.
-        selectedVoiceoverLabel?.let { voiceover ->
-            val forVoice = variants.filter { it.voiceoverLabel == voiceover && it.episode == null }
-            if (forVoice.isNotEmpty()) return forVoice
-        }
-        selectedEpisodeInfo?.key?.let { episodeKey ->
-            val forEpisode = variants.filter { it.episode?.key == episodeKey }
-            if (forEpisode.isNotEmpty()) return forEpisode
-        }
-        return emptyList()
+        return selectedVoiceoverLabel
+            ?.let { voice -> variants.filter { it.voiceoverLabel == voice && it.episode == null } }
+            .orEmpty()
     }
 
     private fun showSeasonDialog() {
