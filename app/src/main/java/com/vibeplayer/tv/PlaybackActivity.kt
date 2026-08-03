@@ -88,6 +88,7 @@ class PlaybackActivity : Activity() {
     private var audioOffsetMs = 0
     private var restorePlayFocusBackground = false
     private var shortMediaReported = false
+    private var stubRetries = 0
 
     private val hideStatus = Runnable { statusText.visibility = View.GONE }
     private val hideControls = Runnable {
@@ -310,6 +311,7 @@ class PlaybackActivity : Activity() {
         resetSourceLadder()
         if (resetRecovery) {
             recovery.reset()
+            stubRetries = 0
             val active = request
             val selectedVariant = active?.qualityVariants?.firstOrNull { it.uri == active.uri }
             selectedQualityLabel = selectedVariant?.label
@@ -1222,6 +1224,20 @@ class PlaybackActivity : Activity() {
             "Source returned ${duration}ms of media - too short for a title; " +
                 "this is what a refusal notice looks like source=${request?.sourceName ?: "unknown"}",
         )
+        // The same address refused a moment ago often serves the real stream on a second
+        // ask, which is what retrying by hand in Lampa does. Bounded, and spaced out - the
+        // point is to survive a refusal, not to badger the source.
+        if (stubRetries < MAX_STUB_RETRIES) {
+            stubRetries += 1
+            val position = (player?.currentPosition ?: restorePositionMs)
+                .takeIf { it > STUB_MEDIA_MAX_MS } ?: restorePositionMs
+            Log.w(TAG, "Refusal notice - asking again (${stubRetries}/$MAX_STUB_RETRIES)")
+            showPersistentStatus("Source refused the stream — asking again…")
+            releasePlayer()
+            mainHandler.postDelayed({ if (isStarted) startPlayback(position) }, STUB_RETRY_DELAY_MS)
+            return
+        }
+
         val next = sourceLadder?.next(SourceFailure.UNAVAILABLE)
         if (next != null) {
             Log.w(TAG, "Refusal notice - moving to ${next.kind} ${LocationRedactor.redact(next.url)}")
@@ -1541,6 +1557,8 @@ class PlaybackActivity : Activity() {
         const val FIRST_FRAME_TIMEOUT_MS = 7_000L
         const val STATUS_TIMEOUT_MS = 2_500L
         const val STUB_MEDIA_MAX_MS = 60_000L
+        const val MAX_STUB_RETRIES = 2
+        const val STUB_RETRY_DELAY_MS = 1_500L
         const val RAW_LABEL_LOG_LIMIT = 14
         const val MAX_RAW_LABEL_LENGTH = 70
         const val CONTROLS_TIMEOUT_MS = 8_000L
