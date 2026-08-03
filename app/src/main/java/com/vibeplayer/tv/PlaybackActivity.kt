@@ -810,15 +810,29 @@ class PlaybackActivity : Activity() {
         voiceoverButton.visibility = if (hasVoiceovers) View.VISIBLE else View.GONE
     }
 
+    /**
+     * The qualities of the stream being watched.
+     *
+     * The plain entries are exactly that - the source's own quality list for what is playing.
+     * Episode and voiceover entries are other streams, and belong to their own menus; the
+     * voiceover filter here once mattered because a voice was only ever known through a
+     * @VIBEVOICE@ entry, which is no longer how a voice reaches us.
+     */
     private fun activeQualityVariants(): List<QualityVariant> {
         val variants = request?.qualityVariants.orEmpty()
+        val plain = variants.filter { it.voiceoverLabel == null && it.episode == null }
+        if (plain.isNotEmpty()) return plain
+
+        // Sources that describe every stream as a voiceover leave nothing plain behind.
         selectedVoiceoverLabel?.let { voiceover ->
-            return variants.filter { it.voiceoverLabel == voiceover && it.episode == null }
+            val forVoice = variants.filter { it.voiceoverLabel == voiceover && it.episode == null }
+            if (forVoice.isNotEmpty()) return forVoice
         }
         selectedEpisodeInfo?.key?.let { episodeKey ->
-            return variants.filter { it.voiceoverLabel == null && it.episode?.key == episodeKey }
+            val forEpisode = variants.filter { it.episode?.key == episodeKey }
+            if (forEpisode.isNotEmpty()) return forEpisode
         }
-        return variants.filter { it.voiceoverLabel == null && it.episode == null }
+        return emptyList()
     }
 
     private fun showSeasonDialog() {
@@ -1441,6 +1455,7 @@ class PlaybackActivity : Activity() {
                 format.frameRate.takeIf { it > 0f }?.let { add(String.format(Locale.US, "%.2f fps", it)) }
             }.joinToString(", ")
             updatePlaybackInfoUi()
+            updateQualityBadge()
             Log.i(
                 TAG,
                 "Video format mime=${format.sampleMimeType} codecs=${format.codecs} " +
