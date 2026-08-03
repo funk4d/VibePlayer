@@ -749,7 +749,9 @@ class PlaybackActivity : Activity() {
             if (selected == selectedVoiceoverLabel) return@showDialog
             chooseBestVariant(voiceoverGroups.getValue(selected))?.let { variant ->
                 selectedVoiceoverLabel = selected
-                switchToEpisode(variant)
+                // Same episode, different voice: carry on from where the viewer is rather
+                // than restarting at the episode's saved position.
+                switchToEpisode(variant, resumeAt = player?.currentPosition ?: restorePositionMs)
             }
         }
     }
@@ -1110,7 +1112,7 @@ class PlaybackActivity : Activity() {
         startPlayback(position)
     }
 
-    private fun switchToEpisode(variant: QualityVariant) {
+    private fun switchToEpisode(variant: QualityVariant, resumeAt: Long? = null) {
         val activeRequest = request ?: return
         val episode = variant.episode ?: return
         selectedEpisodeInfo = episode
@@ -1128,8 +1130,11 @@ class PlaybackActivity : Activity() {
             "Switch episode season=${episode.season} episode=${episode.episode} " +
                 "quality=${variant.label} resume=${episode.resumePositionMs}ms",
         )
-        showPersistentStatus("Season ${episode.season} · Episode ${episode.episode}")
-        startPlayback(episode.resumePositionMs)
+        showPersistentStatus(
+            selectedVoiceoverLabel?.takeIf { resumeAt != null }
+                ?: "Season ${episode.season} · Episode ${episode.episode}",
+        )
+        startPlayback(resumeAt ?: episode.resumePositionMs)
     }
 
     private fun finishWithPlaybackResult() {
