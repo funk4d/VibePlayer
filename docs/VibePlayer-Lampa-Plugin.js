@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.19.0';
+    var BRIDGE_VERSION = '0.20.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -587,7 +587,11 @@
         // Every episode in there already carries a direct stream, for every voice and every
         // season, which is the whole catalogue the source has to offer at zero further cost.
         var folder = value && typeof value === 'object' ? value.folder : null;
-        if (folder && typeof folder === 'object') sourceFolder = folder;
+        if (!folder || typeof folder !== 'object') return;
+        // A new answer describes a different balancer. Entries kept from the previous one
+        // would otherwise show up as voices this source never had.
+        sourceFolder = folder;
+        sourceItems = [];
     }
 
     function hookSourceComponent() {

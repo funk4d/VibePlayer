@@ -344,6 +344,15 @@ class PlaybackActivity : Activity() {
                     .orEmpty().ifEmpty { "(none)" },
             )
             val variants = activeRequest.qualityVariants
+            // Voice names are what the source calls its own audio tracks - no addresses, no
+            // tokens - and seeing them is the only way to tell a missing one from a duplicate.
+            Log.i(
+                TAG,
+                "Voices raw=" + variants.mapNotNull { it.episode?.voice }.distinct().sorted() +
+                    " forCurrent=" + voicesForCurrentEpisode().keys.sorted() +
+                    " selected=" + (selectedVoiceoverLabel ?: "none") +
+                    " at=" + (selectedEpisodeInfo?.let { "S${it.season}E${it.episode}" } ?: "none"),
+            )
             Log.i(
                 TAG,
                 "Intent position=${activeRequest.startPositionMs}ms " +
@@ -738,14 +747,23 @@ class PlaybackActivity : Activity() {
 
     private fun voicesForCurrentEpisode(): Map<String, List<QualityVariant>> {
         val current = selectedEpisodeInfo
-        val episodeGroups = if (current != null) {
-            episodeVariants(current.season, current.episode)
-        } else {
-            emptyList()
+        val inSeason = request?.qualityVariants.orEmpty().filter {
+            it.episode?.voice != null && it.episode.season == (current?.season ?: it.episode.season)
         }
-        val byVoice = episodeGroups
-            .filter { it.episode?.voice != null }
+        val byVoice = inSeason
             .groupBy { requireNotNull(it.episode?.voice) }
+            .mapValues { (_, entries) ->
+                // Prefer the episode being watched; a voice that lacks it still belongs in the
+                // list, pointing at the nearest episode it does carry.
+                val wanted = current?.episode
+                val exact = entries.filter { it.episode?.episode == wanted }
+                exact.ifEmpty {
+                    wanted?.let { target ->
+                        entries.minByOrNull { kotlin.math.abs((it.episode?.episode ?: 0) - target) }
+                            ?.let(::listOf)
+                    } ?: entries
+                }
+            }
         if (byVoice.isNotEmpty()) return foldVoiceAliases(byVoice)
 
         // Sources without episodes still offer plain voiceover variants of one stream.
@@ -1188,6 +1206,10 @@ class PlaybackActivity : Activity() {
             "Source returned ${duration}ms of media - too short for a title; " +
                 "this is what a refusal notice looks like source=${request?.sourceName ?: "unknown"}",
         )
+        val next = sourceLadder?.next(SourceFailure.UNAVAILABLE) ?: return
+        Log.w(TAG, "Refusal notice - moving to ${next.kind} ${LocationRedactor.redact(next.url)}")
+        showPersistentStatus("Source refused the stream — trying a backup…")
+        startPlayback(restorePositionMs)
     }
 
     private fun armFirstFrameWatchdog() {
