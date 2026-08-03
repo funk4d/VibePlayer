@@ -138,7 +138,7 @@ internal object PlayerFactory {
             .build()
     }
 
-    private const val FALLBACK_USER_AGENT = "VibePlayer/0.24 (TCL EP680; Android 9)"
+    private const val FALLBACK_USER_AGENT = "VibePlayer/0.25 (TCL EP680; Android 9)"
 
     /**
      * Reports which address family each media host was actually reached over, once per host.

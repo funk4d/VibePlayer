@@ -967,6 +967,11 @@ class PlaybackActivity : Activity() {
         qualityButton.contentDescription = "${getString(R.string.quality)}: $badge"
     }
 
+    private fun frameSize(format: Format): String? {
+        if (format.width <= 0 || format.height <= 0) return null
+        return "${format.width}×${format.height}"
+    }
+
     private fun qualityBadge(height: Int?): String = when {
         height == null -> "Auto"
         height >= 1441 -> "4K"
@@ -1289,7 +1294,10 @@ class PlaybackActivity : Activity() {
             currentVideoIsDolbyVision = format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION
             val profile = MediaCodecUtil.getCodecProfileAndLevel(format)?.first
             videoInfo = buildList {
-                add(qualityBadge(format.height.takeIf { it > 0 }))
+                // The technical line reports what is actually being decoded. A badge rounds
+                // 1920x864 up to "1080" and hides the crop, which is the one thing worth
+                // seeing here; the quality button keeps the badge.
+                add(frameSize(format) ?: qualityBadge(format.height.takeIf { it > 0 }))
                 add(videoCodecName(format))
                 format.frameRate.takeIf { it > 0f }?.let { add(String.format(Locale.US, "%.2f fps", it)) }
             }.joinToString(", ")
