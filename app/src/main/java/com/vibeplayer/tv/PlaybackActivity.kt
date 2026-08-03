@@ -819,34 +819,33 @@ class PlaybackActivity : Activity() {
     /**
      * The qualities of the stream being watched - and of nothing else.
      *
-     * The plain entries describe the stream Lampa launched. Once the viewer has moved to a
-     * different episode inside the player they describe something that is no longer playing,
-     * and offering them sends the viewer back to the episode they left. When the episode in
-     * hand has no quality list of its own, the stream's own variants are the answer, which is
-     * what the track menu shows.
+     * The plain entries describe the stream Lampa launched, and they are the right answer
+     * for exactly as long as that stream is the one playing. The test for that needs no
+     * bookkeeping: the address being played is one of them, or it is not. Once the viewer has
+     * moved to another episode it is not, and offering them would send the viewer back to the
+     * episode they left.
      */
     private fun activeQualityVariants(): List<QualityVariant> {
         val variants = request?.qualityVariants.orEmpty()
-        val current = selectedEpisodeInfo
+        val playing = request?.uri
 
+        val plain = variants.filter { it.voiceoverLabel == null && it.episode == null }
+        if (plain.any { it.uri == playing }) return plain
+
+        val current = selectedEpisodeInfo
         if (current != null) {
             val forEpisode = variants.filter {
                 it.episode?.season == current.season &&
                     it.episode.episode == current.episode &&
                     matchesSelectedVoice(it)
             }
+            // One entry is not a choice; the stream's own variants are, and the track menu
+            // shows those.
             if (forEpisode.size > 1) return forEpisode
-
-            val launched = request?.currentEpisode
-            val stillOnLaunched = launched == null ||
-                (launched.season == current.season && launched.episode == current.episode)
-            if (!stillOnLaunched) return emptyList()
+            return emptyList()
         }
 
-        val plain = variants.filter { it.voiceoverLabel == null && it.episode == null }
         if (plain.isNotEmpty()) return plain
-
-        // Sources that describe every stream as a voiceover leave nothing plain behind.
         return selectedVoiceoverLabel
             ?.let { voice -> variants.filter { it.voiceoverLabel == voice && it.episode == null } }
             .orEmpty()
