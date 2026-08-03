@@ -90,6 +90,7 @@ class PlaybackActivity : Activity() {
     private var restorePlayFocusBackground = false
     private var shortMediaReported = false
     private var stubRetries = 0
+    private var playingLaunchedStream = true
 
     private val hideStatus = Runnable { statusText.visibility = View.GONE }
     private val hideControls = Runnable {
@@ -313,6 +314,7 @@ class PlaybackActivity : Activity() {
         if (resetRecovery) {
             recovery.reset()
             stubRetries = 0
+            playingLaunchedStream = true
             val active = request
             val selectedVariant = active?.qualityVariants?.firstOrNull { it.uri == active.uri }
             selectedQualityLabel = selectedVariant?.label
@@ -714,6 +716,11 @@ class PlaybackActivity : Activity() {
 
     private fun showQualityDialog() {
         val variants = distinctQualityChoices(activeQualityVariants())
+        Log.i(
+            TAG,
+            "Quality menu launched=$playingLaunchedStream choices=${variants.map { it.label }} " +
+                "tracks=${collectTracks(C.TRACK_TYPE_VIDEO).size} selected=${selectedQualityLabel ?: "none"}",
+        )
         if (variants.size > 1) {
             val labels = variants.map { variant ->
                 if (variant.label == selectedQualityLabel) {
@@ -830,36 +837,30 @@ class PlaybackActivity : Activity() {
     /**
      * The qualities of the stream being watched - and of nothing else.
      *
-     * The plain entries describe the stream Lampa launched, and they are the right answer
-     * for exactly as long as that stream is the one playing. The test for that needs no
-     * bookkeeping: the address being played is one of them, or it is not. Once the viewer has
-     * moved to another episode it is not, and offering them would send the viewer back to the
-     * episode they left.
+     * The list Lampa sends describes the stream it launched, whose address may be a default
+     * the list does not even contain. So whether it still applies is not something to deduce
+     * from addresses or episode numbers: it applies until the viewer switches episode inside
+     * the player, and that is recorded when it happens.
      */
     private fun activeQualityVariants(): List<QualityVariant> {
         val variants = request?.qualityVariants.orEmpty()
-        val playing = request?.uri
 
-        val plain = variants.filter { it.voiceoverLabel == null && it.episode == null }
-        if (plain.any { it.uri == playing }) return plain
-
-        val current = selectedEpisodeInfo
-        if (current != null) {
-            val forEpisode = variants.filter {
-                it.episode?.season == current.season &&
-                    it.episode.episode == current.episode &&
-                    matchesSelectedVoice(it)
+        if (playingLaunchedStream) {
+            val plain = variants.filter { it.voiceoverLabel == null && it.episode == null }
+            if (plain.isNotEmpty()) return plain
+            selectedVoiceoverLabel?.let { voice ->
+                val forVoice = variants.filter { it.voiceoverLabel == voice && it.episode == null }
+                if (forVoice.isNotEmpty()) return forVoice
             }
-            // One entry is not a choice; the stream's own variants are, and the track menu
-            // shows those.
-            if (forEpisode.size > 1) return forEpisode
             return emptyList()
         }
 
-        if (plain.isNotEmpty()) return plain
-        return selectedVoiceoverLabel
-            ?.let { voice -> variants.filter { it.voiceoverLabel == voice && it.episode == null } }
-            .orEmpty()
+        val current = selectedEpisodeInfo ?: return emptyList()
+        return variants.filter {
+            it.episode?.season == current.season &&
+                it.episode.episode == current.episode &&
+                matchesSelectedVoice(it)
+        }
     }
 
     private fun showSeasonDialog() {
@@ -1196,6 +1197,8 @@ class PlaybackActivity : Activity() {
         val activeRequest = request ?: return
         val episode = variant.episode ?: return
         recordWatchProgress()
+        // From here the quality list Lampa sent describes something that is no longer playing.
+        playingLaunchedStream = false
         selectedEpisodeInfo = episode
         // The voice belongs to the entry now, so switching an episode stays inside the voice
         // being watched instead of dropping back to "whatever Lampa picked".
