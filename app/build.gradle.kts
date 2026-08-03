@@ -10,8 +10,8 @@ android {
         applicationId = "com.vibeplayer.tv"
         minSdk = 28
         targetSdk = 28
-        versionCode = 48
-        versionName = "0.48.0"
+        versionCode = 49
+        versionName = "0.49.0"
 
         ndk {
             abiFilters += "armeabi-v7a"

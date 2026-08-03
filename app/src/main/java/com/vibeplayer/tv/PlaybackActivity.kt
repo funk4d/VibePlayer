@@ -35,6 +35,7 @@ import java.util.Locale
 class PlaybackActivity : Activity() {
     private lateinit var playerView: PlayerView
     private lateinit var softwarePlayerView: PlayerView
+    private lateinit var texturePlayerView: PlayerView
     private lateinit var statusText: TextView
     private lateinit var playbackInfo: TextView
     private lateinit var playbackTitleGroup: View
@@ -87,7 +88,7 @@ class PlaybackActivity : Activity() {
     private var decoderInfo: String? = null
     private var seekIntervalMs = DEFAULT_SEEK_MS
     private var audioOffsetMs = 0
-    private var forceSoftwareVideo = false
+    private var videoPathMode = VIDEO_PATH_HARDWARE_SURFACE
     private var restorePlayFocusBackground = false
     private var shortMediaReported = false
     private var stubRetries = 0
@@ -241,6 +242,7 @@ class PlaybackActivity : Activity() {
     private fun bindViews() {
         playerView = findViewById(R.id.player_view)
         softwarePlayerView = findViewById(R.id.software_player_view)
+        texturePlayerView = findViewById(R.id.texture_player_view)
         statusText = findViewById(R.id.status_text)
         playbackInfo = findViewById(R.id.playback_info)
         playbackTitleGroup = findViewById(R.id.playback_title_group)
@@ -304,7 +306,8 @@ class PlaybackActivity : Activity() {
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         seekIntervalMs = preferences.getLong(PREF_SEEK_INTERVAL_MS, DEFAULT_SEEK_MS)
             .coerceIn(MIN_SEEK_MS, MAX_SEEK_MS)
-        forceSoftwareVideo = preferences.getBoolean(PREF_FORCE_SOFTWARE_VIDEO, false)
+        videoPathMode = preferences.getInt(PREF_VIDEO_PATH, VIDEO_PATH_HARDWARE_SURFACE)
+            .coerceIn(VIDEO_PATH_HARDWARE_SURFACE, VIDEO_PATH_SOFTWARE)
         audioOffsetMs = preferences.getInt(PREF_AUDIO_OFFSET_MS, 0)
             .coerceIn(-AudioOffsetProcessor.MAX_OFFSET_MS, AudioOffsetProcessor.MAX_OFFSET_MS)
         audioOffsetProcessor.offsetMs = audioOffsetMs
@@ -445,14 +448,14 @@ class PlaybackActivity : Activity() {
             recovery.attempt,
             audioOffsetProcessor,
             nightMode.audioProcessor,
-            forceSoftwareVideo,
+            videoPathMode == VIDEO_PATH_SOFTWARE,
         )
         val newPlayer = components.player
         trackSelector = components.trackSelector
         player = newPlayer
-        playerView.player = newPlayer
         newPlayer.addListener(playerListener)
         newPlayer.addAnalyticsListener(analyticsListener)
+        showActiveVideoView()
         newPlayer.setMediaItem(PlayerFactory.mediaItem(source), positionMs.coerceAtLeast(0L))
         newPlayer.prepare()
         newPlayer.play()
@@ -464,6 +467,7 @@ class PlaybackActivity : Activity() {
         mainHandler.removeCallbacks(firstFrameWatchdog)
         mainHandler.removeCallbacks(hideStatus)
         if (::playerView.isInitialized) playerView.player = null
+        if (::texturePlayerView.isInitialized) texturePlayerView.player = null
         if (::softwarePlayerView.isInitialized) softwarePlayerView.player = null
         player?.release()
         player = null
@@ -621,7 +625,7 @@ class PlaybackActivity : Activity() {
             "Seek step: ${seekIntervalMs / 1_000L}s",
             "Audio sync: ${formatAudioOffset(audioOffsetMs)}",
             getString(if (nightMode.requestedEnabled) R.string.night_mode_on else R.string.night_mode_off),
-            "Video decoder: ${if (forceSoftwareVideo) "software" else "hardware"}",
+            "Video path: ${videoPathName()}",
         )
         showDialog(
             title = getString(R.string.settings),
@@ -640,14 +644,12 @@ class PlaybackActivity : Activity() {
                     )
                 }
                 6 -> {
-                    forceSoftwareVideo = !forceSoftwareVideo
+                    videoPathMode = (videoPathMode + 1) % (VIDEO_PATH_SOFTWARE + 1)
                     getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE).edit()
-                        .putBoolean(PREF_FORCE_SOFTWARE_VIDEO, forceSoftwareVideo)
+                        .putInt(PREF_VIDEO_PATH, videoPathMode)
                         .apply()
-                    Log.i(TAG, "Video decoder forced to ${if (forceSoftwareVideo) "software" else "hardware"}")
-                    showPersistentStatus(
-                        if (forceSoftwareVideo) "Software decoder" else "Hardware decoder",
-                    )
+                    Log.i(TAG, "Video path=${videoPathName()}")
+                    showPersistentStatus(videoPathName())
                     startPlayback(player?.currentPosition ?: restorePositionMs)
                 }
             }
@@ -1663,7 +1665,38 @@ class PlaybackActivity : Activity() {
         else -> state.toString()
     }
 
-    private fun activePlayerView(): PlayerView = if (usingSoftwareVideoOutput) softwarePlayerView else playerView
+    /**
+     * Which view the decoder draws into.
+     *
+     * The platform decoder mis-decodes some streams here that the built-in player renders
+     * cleanly, and the two differ in how the frames reach the screen: straight into a surface,
+     * or through a texture. Being able to try both is what tells those apart.
+     */
+    private fun videoPathName(): String = when (videoPathMode) {
+        VIDEO_PATH_HARDWARE_TEXTURE -> "hardware · texture"
+        VIDEO_PATH_SOFTWARE -> "software"
+        else -> "hardware · surface"
+    }
+
+    private fun activePlayerView(): PlayerView = when {
+        usingSoftwareVideoOutput -> softwarePlayerView
+        videoPathMode == VIDEO_PATH_HARDWARE_TEXTURE -> texturePlayerView
+        else -> playerView
+    }
+
+    /** Shows the view the current path draws into and hides the others. */
+    private fun showActiveVideoView() {
+        if (!::texturePlayerView.isInitialized) return
+        val active = activePlayerView()
+        listOf(playerView, texturePlayerView, softwarePlayerView).forEach { view ->
+            if (view !== active) {
+                view.player = null
+                view.visibility = View.GONE
+            }
+        }
+        active.visibility = View.VISIBLE
+        active.player = player
+    }
 
     private fun useSoftwareVideoOutput(useSoftware: Boolean) {
         if (usingSoftwareVideoOutput == useSoftware) return
@@ -1703,7 +1736,10 @@ class PlaybackActivity : Activity() {
         const val PREFERENCES_NAME = "vibeplayer_settings"
         const val PREF_SEEK_INTERVAL_MS = "seek_interval_ms"
         const val PREF_AUDIO_OFFSET_MS = "audio_offset_ms"
-        const val PREF_FORCE_SOFTWARE_VIDEO = "force_software_video"
+        const val PREF_VIDEO_PATH = "video_path_mode"
+        const val VIDEO_PATH_HARDWARE_SURFACE = 0
+        const val VIDEO_PATH_HARDWARE_TEXTURE = 1
+        const val VIDEO_PATH_SOFTWARE = 2
         val SEEK_INTERVAL_OPTIONS_SECONDS = listOf(5L, 10L, 15L, 30L, 60L, 90L)
         const val TIMELINE_STEPS = 100L
         const val FIRST_FRAME_TIMEOUT_MS = 7_000L
