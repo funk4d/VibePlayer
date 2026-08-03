@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.17.0';
+    var BRIDGE_VERSION = '0.18.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -193,9 +193,23 @@
         for (var index = 0; index < playlist.length && !current; index += 1) {
             if (ownsStreamUrl(playlist[index], expectedUrl)) current = playlist[index];
         }
+        if (!current) {
+            var season = integer(data.season, -1);
+            var episode = integer(data.episode, -1);
+            for (var i = 0; i < playlist.length && !current; i += 1) {
+                var entry = playlist[i];
+                if (entry && integer(entry.season, -2) === season && integer(entry.episode, -2) === episode) {
+                    current = entry;
+                }
+            }
+        }
         if (!current) return 0;
 
         var merged = Object.assign({}, current.quality || {});
+        if (!Object.keys(merged).length) {
+            var own = itemStream(current) || expectedUrl;
+            if (own) merged[plainText(current.quality_label) || 'Auto'] = own;
+        }
         var mirrored = 0;
         Object.keys(qualities).forEach(function (label) {
             if (!isBridgeLabel(label)) return;
@@ -713,6 +727,15 @@
             }
             window.VibePlayerBridge.lastStats = stats;
             window.VibePlayerBridge.lastSource = sourceSummary();
+            if (data && data.headers && typeof data.headers === 'object') {
+                data.headers['X-Vibe-Stats'] = 'e' + stats.episodes.serialized +
+                    'v' + stats.voiceovers.serialized +
+                    'm' + stats.mirrored +
+                    's' + window.VibePlayerBridge.lastSource.items +
+                    'w' + window.VibePlayerBridge.lastSource.withStream +
+                    'q' + (data.quality ? Object.keys(data.quality).length : 0) +
+                    'l' + (Array.isArray(data.playlist) ? data.playlist.length : 0);
+            }
             return original.call(this, link, data ? encodePayload(payload, data) : payload);
         };
         wrapped.__vibeOriginal = original;

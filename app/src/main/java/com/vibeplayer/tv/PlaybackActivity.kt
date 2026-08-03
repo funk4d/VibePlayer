@@ -353,7 +353,8 @@ class PlaybackActivity : Activity() {
                     "voiceovers=${variants.mapNotNull { it.voiceoverLabel }.distinct().size} " +
                     "reserves=${activeRequest.reserveUrls.size} " +
                     "capture=${activeRequest.bridgeProbe ?: "none"} " +
-                    "plugin=${HeaderParser.valueOf(activeRequest.headers, "X-Vibe-Bridge") ?: "unknown"}]",
+                    "plugin=${HeaderParser.valueOf(activeRequest.headers, "X-Vibe-Bridge") ?: "unknown"} " +
+                    "stats=${HeaderParser.valueOf(activeRequest.headers, "X-Vibe-Stats") ?: "none"}]",
             )
         }
     }
