@@ -115,6 +115,7 @@ class PlaybackActivity : Activity() {
     private val updateProgress = object : Runnable {
         override fun run() {
             updateProgressUi()
+            recordWatchProgress()
             mainHandler.postDelayed(this, PROGRESS_UPDATE_MS)
         }
     }
@@ -136,6 +137,7 @@ class PlaybackActivity : Activity() {
         loadUserSettings()
         setupControls()
         hideSystemUi()
+        WatchProgressServer.start()
         acceptIntent(intent, resetRecovery = true)
         restorePositionMs = savedInstanceState?.getLong(STATE_POSITION)
             ?: request?.startPositionMs
@@ -1147,6 +1149,7 @@ class PlaybackActivity : Activity() {
     private fun switchToEpisode(variant: QualityVariant, resumeAt: Long? = null) {
         val activeRequest = request ?: return
         val episode = variant.episode ?: return
+        recordWatchProgress()
         selectedEpisodeInfo = episode
         // The voice belongs to the entry now, so switching an episode stays inside the voice
         // being watched instead of dropping back to "whatever Lampa picked".
@@ -1169,7 +1172,22 @@ class PlaybackActivity : Activity() {
         startPlayback(resumeAt ?: episode.resumePositionMs)
     }
 
+    /**
+     * Notes how far the episode being watched has got, against the identity Lampa uses for it.
+     * Lampa only ever learns about the episode it launched, so everything chosen afterwards
+     * is remembered here and collected by the bridge.
+     */
+    private fun recordWatchProgress() {
+        val activePlayer = player ?: return
+        WatchProgressServer.record(
+            hash = selectedEpisodeInfo?.timelineHash,
+            positionMs = activePlayer.currentPosition,
+            durationMs = activePlayer.duration,
+        )
+    }
+
     private fun finishWithPlaybackResult() {
+        recordWatchProgress()
         val activeRequest = request
         val activePlayer = player
         val position = (activePlayer?.currentPosition ?: restorePositionMs).coerceAtLeast(0L)

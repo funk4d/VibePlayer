@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.20.0';
+    var BRIDGE_VERSION = '0.21.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -14,6 +14,10 @@
     // A whole series across every voice can be hundreds of entries; the Intent is not a
     // place to discover a size limit the hard way.
     var MAX_SOURCE_ITEMS = 400;
+    // The player's own loopback endpoint. Nothing here reaches a source or the network at
+    // large - it exists so that no extra request has to be made to learn what was watched.
+    var PROGRESS_ENDPOINT = 'http://127.0.0.1:47615/progress';
+    var PROGRESS_POLL_MS = 4000;
 
     if (window.VibePlayerBridge && window.VibePlayerBridge.version === BRIDGE_VERSION) return;
 
@@ -362,7 +366,10 @@
             encodeURIComponent(quality || 'Auto'),
             // The voice belongs to the entry: without it the player cannot answer "which
             // voices exist for the episode I just switched to".
-            encodeURIComponent(plainText(item && item.voice_name) || '')
+            encodeURIComponent(plainText(item && item.voice_name) || ''),
+            // Lampa identifies an episode in its timeline by this hash. The player reports
+            // progress against it for episodes chosen after launch.
+            encodeURIComponent(nonEmptyString(timeline.hash) || '')
         ];
         return EPISODE_PREFIX + fields.join('|');
     }
@@ -659,6 +666,57 @@
         };
     }
 
+    /**
+     * Collects what the player watched after it was launched.
+     *
+     * Lampa credits a playback result to the entry it started, so episodes chosen inside the
+     * player leave no trace. The player cannot call into this page - it is a separate process
+     * and a page has no address - so it offers its progress on a loopback endpoint instead,
+     * and this reads it whenever Lampa is back in front of the viewer.
+     */
+    var appliedSession = null;
+
+    function applyWatchProgress() {
+        if (typeof fetch !== 'function' || !window.Lampa || !Lampa.Timeline) return;
+
+        fetch(PROGRESS_ENDPOINT, { cache: 'no-store' })
+            .then(function (response) { return response.ok ? response.json() : null; })
+            .then(function (payload) {
+                if (!payload || !Array.isArray(payload.items) || !payload.items.length) return;
+                // A run's progress is applied once. Re-applying it would overwrite whatever
+                // the viewer has watched in Lampa since.
+                var stamp = payload.session + ':' + payload.items.length;
+                if (stamp === appliedSession) return;
+                appliedSession = stamp;
+
+                var applied = 0;
+                payload.items.forEach(function (item) {
+                    if (!item || !nonEmptyString(item.hash)) return;
+                    Lampa.Timeline.update({
+                        hash: item.hash,
+                        time: item.time,
+                        duration: item.duration,
+                        percent: item.percent
+                    });
+                    applied += 1;
+                });
+                if (applied) console.info('[VibePlayer] progress applied for ' + applied + ' episodes');
+            })
+            .catch(function () { /* the player is simply not running */ });
+    }
+
+    function watchForPlayerProgress() {
+        if (typeof setInterval !== 'function') return;
+        setInterval(function () {
+            if (!document.hidden) applyWatchProgress();
+        }, PROGRESS_POLL_MS);
+        if (typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) applyWatchProgress();
+            });
+        }
+    }
+
     var capturedPlayback = null;
 
     window.VibePlayerBridge = {
@@ -757,6 +815,7 @@
         hookOpenPlayer(Lampa);
         hookSourceComponent();
         if (typeof setInterval === 'function') setInterval(hookSourceComponent, COMPONENT_WATCH_MS);
+        watchForPlayerProgress();
         window.VibePlayerBridge.installed = true;
         console.info('[VibePlayer] bridge ' + BRIDGE_VERSION + ' installed');
         return true;
