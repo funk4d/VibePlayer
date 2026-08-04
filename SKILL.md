@@ -45,6 +45,8 @@ These facts were read from the actual television over ADB on 2026-08-02. Recheck
 - Hardware audio decoder `OMX.RTK.audio.decoder` advertises AC-3, E-AC-3, AC-4, DTS, DTS-HD, and DTS-HD LBR; Google decoders cover AAC, MP3, Vorbis, Opus, FLAC, and common PCM formats
 - The firmware exposes `DynamicsProcessing` through `/vendor/lib/soundfx/libdynproc.so`, but the real API rejects construction with `AudioEffect: bad parameter value`. Treat the effect as broken, not available.
 - The active media output is the analog headphone device
+- The hardware decoder corrupts some streams when its frames go straight into a surface - torn macroblocks and colour noise over a stream the log calls ordinary, with no error reported anywhere. The same stream through a texture view decodes cleanly, and the built-in Lampa player renders it without trouble. The vendor codec XML has the decoder's alignment limits commented out, and the widths seen doing this are not multiples of sixteen. Texture output is therefore the default video path; surface and software remain selectable for comparison.
+- Software H.264 decodes those streams correctly at roughly one frame per second, which confirms the data and rules out the pipeline, but is not a playback option.
 - The four-core CPU is fully saturated by four dav1d workers on a measured 3840x2160 23.976 fps AV1 10-bit stream. It dropped 102 frames in the first 5 seconds even with Media3's recommended decoder GL output. 4K AV1 software playback is not viable.
 - The same Alloha master contained exactly one 3840x2160 AV1 rendition, so a player-side quality selector had no 1080p track to choose.
 - Official Lampa `top.rootu.lampa` 1.12.9 is installed alongside the older customized `ru.twicker.lampa` 7.7.9. The official build resolves VibePlayer as an external HLS player and passes `position`, `quality_levels`, `quality_urls`, and headers.
@@ -90,6 +92,9 @@ Use one exported playback `Activity`, one layout containing `PlayerView` plus a 
 - `PlayerFactory`: construct the Media3 player, data source, renderer policy, and track constraints.
 - `PlaybackRecoveryController`: own first-frame detection, exactly-once DV base-layer retry, saved position, and terminal error state.
 - `SourceLadder`: own the codec-independent axis of recovery — which address and which container hint to open next when a stream fails.
+- `PlaybackSelection`: own every rule about what the viewer may choose — qualities, voices, seasons, episodes — and what choosing it means. No Android types, so the rules are settled by tests.
+- `EpisodeResolver`: ask a source for one episode's per-quality addresses, once, when that episode is chosen.
+- `WatchProgressServer`: offer this session's progress on a loopback endpoint for the bridge to collect.
 - `NightModeAudioProcessor`: compress decoded 16-bit PCM with linked-channel envelope/gain control before `AudioTrack`.
 - `NightModeController`: own and toggle that processor without depending on TCL audio effects.
 - `PlaybackActivity`: own lifecycle, `PlayerView`, D-pad dispatch, new intents, and user-visible errors.
@@ -119,13 +124,19 @@ The optional Lampa bridge lives in `docs/VibePlayer-Lampa-Plugin.js` and is inte
 Use these reserved labels:
 
 - `@VIBEVOICE@<encoded-name>|<encoded-quality>` for direct/per-quality voiceover URLs.
-- `@VIBEEPISODE@<season>|<episode>|<percent>|<timeline-seconds>|<encoded-title>|<encoded-quality>` for playable entries already present in `data.playlist`.
+- `@VIBEEPISODE@<season>|<episode>|<percent>|<timeline-seconds>|<encoded-title>|<encoded-quality>|<encoded-voice>|<encoded-timeline-hash>|<encoded-resolve-url>` for every episode the source has loaded. The trailing three fields are what make the player able to answer questions it otherwise cannot: which voices exist for the episode just switched to, which entry in Lampa's timeline this episode is, and where to ask for its other qualities.
 - `@VIBEMETA@<encoded-title>|<encoded-source>` for top-overlay display metadata; pair it with the current URL, then filter it out of VibePlayer's quality menu.
 - `@VIBERESERVE@<order>|<encoded-label>` for the backup addresses a source ships in `url_reserve` and `quality_reserve`. Order them with the reserve for the playing quality first, drop any that repeat the primary URL, and filter them out of VibePlayer's quality menu — they are transport for `SourceLadder`, not user-selectable qualities.
 
+A source answers in parts - one season, one voice - and rebuilds its component between them, so
+component identity cannot say whether an answer continues the current source. The card can:
+merge parts while the card is the same, replace when it changes. Read what the source loaded
+rather than asking again: each entry already carries a direct address, and the per-quality ones
+are one request away, made only for the episode actually chosen.
+
 The bridge may also carry data over from the payload Lampa last handed its built-in player. Scope that strictly: find the entry that *owns* the launched URL — the capture itself, or one entry of its `playlist` — and take stream-specific data (`quality`, `timeline`, `url_reserve`, `quality_reserve`) only from that entry. Card-level context (`title`, `playlist`, `voiceovers`, `subtitles`) may come from the top level. A hit anywhere in the capture is not sufficient: matching on the playlist and then copying the top-level `quality` map hands VibePlayer a menu of *sibling episode* streams, so switching quality plays the previous episode.
 
-VibePlayer parses these prefixes back into separate UI models. Show Season/Episode controls only when episode labels are actually present. Mark an episode watched only at more than 90%, show its number/title/progress, and resume from its serialized timeline time. The bridge code is source-agnostic, but playable voiceover and episode URLs still have to exist in the source payload; it cannot manufacture URLs hidden behind asynchronous provider callbacks. Never log stream URLs, headers, JSON callback bodies, or metadata payloads; structural counts are sufficient. Verify the installed bridge against the real source before claiming complete voiceover or episode coverage. Keep `docs/plugin.test.js` passing for JSON-string forwarding and all reserved label types.
+VibePlayer parses these prefixes back into separate UI models. Show Season/Episode controls only when episode labels are actually present. Mark an episode watched only at more than 90%, show its number/title/progress, and resume from its serialized timeline time. Choosing a season chooses a season and opens its episodes; playing is what choosing an episode does. The bridge code is source-agnostic, but playable voiceover and episode URLs still have to exist in the source payload; it cannot manufacture URLs hidden behind asynchronous provider callbacks. Never log stream URLs, headers, JSON callback bodies, or metadata payloads; structural counts are sufficient. Verify the installed bridge against the real source before claiming complete voiceover or episode coverage. Keep `docs/plugin.test.js` passing for JSON-string forwarding and all reserved label types.
 
 Allow cleartext HTTP deliberately in the manifest because the real source ecosystem may use it. Do not disable TLS validation.
 
@@ -139,6 +150,17 @@ Record whether the MIME type was declared by the caller or guessed from the addr
 2. **Reserve fallback.** On an address that does not deliver at all, move to the next `@VIBERESERVE@` candidate.
 
 Rebuild the ladder whenever the playing URL changes — new intent, quality switch, episode switch — so one bad stream never spends another stream's budget. Keep this axis separate from the Dolby Vision axis in `PlaybackRecoveryController`: one is about which bytes to fetch, the other about which decoder to use.
+
+Reserve addresses describe the stream the source was asked about, so they expire the moment the viewer chooses a different episode. Carrying them across a switch makes a stumble on the new episode fall back to the old one — playing the wrong episode, at the position the old one was left at.
+
+Lampa credits a playback result to the entry it launched, so episodes chosen inside the player
+leave no trace in its timeline, and none of Lampa's own doors carry the information back:
+`AndroidJS` runs one way, the result carries only a position, `parseUriData` accepts only
+themoviedb.org, `HomeWatch` only home-screen events. The player therefore offers a door of its
+own - a loopback endpoint listing how far each episode got, keyed by the timeline hash the bridge
+ships in every episode label - and the page collects it when Lampa is next in front of the
+viewer. Bound to `127.0.0.1`; the bridge's no-network rule is enforced as no network beyond that
+endpoint rather than none at all.
 
 Never probe a source to answer these questions. No HEAD requests, no speculative GETs, no polling, no retry loops. Sources rate-limit and ban by IP, and a diagnostic request storm has already cost this project access once. Everything above is derived from information Media3 reports about loads that happened anyway.
 
@@ -182,6 +204,29 @@ differently arrives as a different client:
 
 Confirm which of these is at fault from the device log before changing any of them; the visible
 symptom is identical for all three.
+
+## Keep the selection rules out of the activity
+
+Qualities, voices, seasons and episodes are one set of interlocking rules, not four features.
+Qualities belong to one episode, voices belong to one episode, episodes belong to one voice, and
+backup addresses belong to the stream the source was asked about. Spread across activity fields
+that several code paths write, a change to one silently changes the others: fixing the quality
+menu emptied the voice list, restoring the voice list offered episodes that played something
+else, and every round trip cost a build, an install and a manual pass on the television.
+
+Keep them in `PlaybackSelection`, which takes the streams and where the viewer is and answers
+what may be chosen and what choosing it means. No Android types, so every rule is settled by a
+unit test. Each case in `PlaybackSelectionTest` is a failure that reached the television first —
+add to it before fixing, not after.
+
+Two rules earn their own mention because both produced bugs that looked like something else:
+
+- **Whether the launched stream still applies is recorded, not deduced.** Neither episode
+  numbering nor the playing address can answer it: sources number seasons their own way, and the
+  launched address is often a default that appears in no list. Record the moment the viewer
+  chooses another episode.
+- **Play the stream the rules chose.** Looking a variant back up by address afterwards can land
+  on a different episode, which is exactly how choosing season three played season one.
 
 ## Define what "all content" means
 
