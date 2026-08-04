@@ -919,11 +919,15 @@ class PlaybackActivity : Activity() {
         }.toTypedArray()
         showDialog(getString(R.string.season), labels) { index ->
             val selectedSeason = seasons[index]
-            val firstEpisode = episodeGroups(selectedSeason).keys.minOrNull()
-            val current = selectedEpisodeInfo
-            selectedEpisodeInfo = current?.takeIf { it.season == selectedSeason }
-                ?: firstEpisode?.let { episodeGroups(selectedSeason)[it]?.firstOrNull()?.episode }
-            updateSeriesControlsUi()
+            if (selectedSeason == selectedEpisodeInfo?.season) return@showDialog
+            // Choosing a season used to relabel the controls and play nothing, which reads as
+            // the player ignoring the choice.
+            val target = selection().pickSeason(selectionState(), selectedSeason)?.let(::toVariant)
+            if (target == null) {
+                Log.w(TAG, "Season $selectedSeason has no playable episode")
+                return@showDialog
+            }
+            switchToEpisode(target)
         }
     }
 

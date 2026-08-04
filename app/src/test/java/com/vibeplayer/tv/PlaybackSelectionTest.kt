@@ -171,6 +171,29 @@ class PlaybackSelectionTest {
     }
 
     @Test
+    fun choosingASeasonMeansAnEpisodeToPlay() {
+        val selection = PlaybackSelection(series)
+        val state = SelectionState(voice = "AlexFilm", season = 1, episode = 2)
+
+        // A season the viewer has not started begins at its first episode.
+        val second = selection.pickSeason(state, season = 2)
+        assertEquals(2, second?.season)
+        assertEquals(1, second?.episode)
+    }
+
+    @Test
+    fun aSeasonResumesAtTheFirstEpisodeNotFinished() {
+        val watched = listOf(
+            episode(4, 1, "AlexFilm").copy(watchedPercent = 100),
+            episode(4, 2, "AlexFilm").copy(watchedPercent = 40),
+            episode(4, 3, "AlexFilm"),
+        )
+        val selection = PlaybackSelection(watched)
+
+        assertEquals(2, selection.pickSeason(SelectionState(voice = "AlexFilm"), 4)?.episode)
+    }
+
+    @Test
     fun sourcesWithoutEpisodesStillOfferTheirVoices() {
         val selection = PlaybackSelection(
             listOf(

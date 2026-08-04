@@ -98,6 +98,25 @@ internal class PlaybackSelection(
     }
 
     /**
+     * Which episode choosing a season means.
+     *
+     * A season is not something that plays; an episode is. Picking one and having nothing
+     * happen is the same to a viewer as the player being broken. The first episode not
+     * already finished is where that season is up to.
+     */
+    fun pickSeason(state: SelectionState, season: Int): Stream? {
+        val episodes = episodes(season)
+        if (episodes.isEmpty()) return null
+        val resumeAt = episodes.entries.firstOrNull { (_, streams) ->
+            streams.any { it.watchedPercent < FINISHED_PERCENT }
+        } ?: episodes.entries.first()
+        return best(
+            resumeAt.value.filter { sameVoice(it.voice, state.voice) }.ifEmpty { resumeAt.value },
+            state,
+        )
+    }
+
+    /**
      * The backup addresses that still apply.
      *
      * A source ships them for the stream it was asked about, so they address the launched
@@ -140,6 +159,7 @@ internal class PlaybackSelection(
 
     companion object {
         private const val FAR_AWAY = Int.MAX_VALUE / 2
+        private const val FINISHED_PERCENT = 90
 
         /** "AlexFilm" and "Алексфильм (AlexFilm)" are one voice named twice. */
         fun voiceKey(name: String): String {
