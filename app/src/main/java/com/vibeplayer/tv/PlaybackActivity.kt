@@ -647,6 +647,28 @@ class PlaybackActivity : Activity() {
         resolveUrl = variant.episode?.resolveUrl,
     )
 
+    private fun playStream(stream: Stream, resumeAt: Long? = null) {
+        val activeRequest = request ?: return
+        val episode = EpisodeVariantInfo(
+            season = stream.season ?: 0,
+            episode = stream.episode ?: 0,
+            title = stream.episodeTitle,
+            watchedPercent = stream.watchedPercent,
+            resumePositionMs = stream.resumePositionMs,
+            voice = stream.voice,
+            timelineHash = stream.timelineHash,
+            resolveUrl = stream.resolveUrl,
+        )
+        switchToEpisode(
+            QualityVariant(
+                label = stream.quality,
+                uri = android.net.Uri.parse(stream.url),
+                episode = episode.takeIf { stream.isEpisode },
+            ),
+            resumeAt = resumeAt,
+        )
+    }
+
     /** Back to the variant the rest of the player speaks in. */
     private fun toVariant(stream: Stream): QualityVariant? {
         val all = request?.qualityVariants.orEmpty() + resolvedEpisodeQualities
@@ -877,11 +899,11 @@ class PlaybackActivity : Activity() {
         showDialog(getString(R.string.voiceover), labels) { index ->
             val selected = options[index]
             if (selected == selectedVoiceoverLabel) return@showDialog
-            chooseBestVariant(voiceoverGroups.getValue(selected))?.let { variant ->
+            selection().pickVoice(selectionState(), selected)?.let { stream ->
                 selectedVoiceoverLabel = selected
                 // Same episode, different voice: carry on from where the viewer is rather
                 // than restarting at the episode's saved position.
-                switchToEpisode(variant, resumeAt = player?.currentPosition ?: restorePositionMs)
+                playStream(stream, resumeAt = player?.currentPosition ?: restorePositionMs)
             }
         }
     }
@@ -919,15 +941,23 @@ class PlaybackActivity : Activity() {
         }.toTypedArray()
         showDialog(getString(R.string.season), labels) { index ->
             val selectedSeason = seasons[index]
-            if (selectedSeason == selectedEpisodeInfo?.season) return@showDialog
-            // Choosing a season used to relabel the controls and play nothing, which reads as
-            // the player ignoring the choice.
-            val target = selection().pickSeason(selectionState(), selectedSeason)?.let(::toVariant)
-            if (target == null) {
-                Log.w(TAG, "Season $selectedSeason has no playable episode")
-                return@showDialog
-            }
-            switchToEpisode(target)
+            // A season is chosen, then an episode within it - picking a season does not play.
+            val target = selection().pickSeason(selectionState(), selectedSeason)
+            selectedEpisodeInfo = selectedEpisodeInfo?.takeIf { it.season == selectedSeason }
+                ?: target?.let { stream ->
+                    EpisodeVariantInfo(
+                        season = stream.season ?: selectedSeason,
+                        episode = stream.episode ?: 0,
+                        title = stream.episodeTitle,
+                        watchedPercent = stream.watchedPercent,
+                        resumePositionMs = stream.resumePositionMs,
+                        voice = stream.voice,
+                        timelineHash = stream.timelineHash,
+                        resolveUrl = stream.resolveUrl,
+                    )
+                }
+            updateSeriesControlsUi()
+            showEpisodeDialog()
         }
     }
 
@@ -947,13 +977,14 @@ class PlaybackActivity : Activity() {
         }.toTypedArray()
         showDialog(getString(R.string.episode), labels) { index ->
             val number = episodeNumbers[index]
-            val picked = selection().pickEpisode(selectionState(), season, number)?.let(::toVariant)
-                ?: chooseBestVariant(groups.getValue(number))
-            picked?.let { chosen ->
-                chosen.episode?.voice?.takeIf { !PlaybackSelection.sameVoice(it, selectedVoiceoverLabel) }
-                    ?.let { Log.i(TAG, "Voice ${selectedVoiceoverLabel ?: "none"} lacks this episode; using $it") }
-                switchToEpisode(chosen)
+            val picked = selection().pickEpisode(selectionState(), season, number)
+            if (picked == null) {
+                Log.w(TAG, "Season $season episode $number has no playable address")
+                return@showDialog
             }
+            picked.voice?.takeIf { !PlaybackSelection.sameVoice(it, selectedVoiceoverLabel) }
+                ?.let { Log.i(TAG, "Voice ${selectedVoiceoverLabel ?: "none"} lacks this episode; using $it") }
+            playStream(picked)
         }
     }
 
