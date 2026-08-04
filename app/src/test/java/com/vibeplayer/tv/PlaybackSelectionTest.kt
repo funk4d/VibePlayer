@@ -157,6 +157,20 @@ class PlaybackSelectionTest {
     }
 
     @Test
+    fun backupAddressesBelongToTheLaunchedEpisodeAlone() {
+        val selection = PlaybackSelection(launchedQualities + series)
+        val backups = listOf("https://s.example/backup/1080", "https://s.example/backup/720")
+
+        val onLaunch = SelectionState(quality = "1080p", season = 1, episode = 1)
+        assertEquals(backups, selection.reserves(onLaunch, backups))
+
+        // They address the episode that was launched. Falling back to them from another one
+        // plays the wrong episode - and, worse, at the position the viewer left the first at.
+        val afterSwitch = onLaunch.copy(episode = 2, leftLaunchedStream = true)
+        assertTrue(selection.reserves(afterSwitch, backups).isEmpty())
+    }
+
+    @Test
     fun sourcesWithoutEpisodesStillOfferTheirVoices() {
         val selection = PlaybackSelection(
             listOf(

@@ -394,7 +394,7 @@ class PlaybackActivity : Activity() {
             SourceLadder(
                 primaryUrl = url,
                 primaryMimeType = if (it.mimeTypeInferred) SourceLadder.containerHint(url) else it.mimeType,
-                reserveUrls = it.reserveUrls,
+                reserveUrls = selection().reserves(selectionState(), it.reserveUrls),
             )
         }
     }

@@ -97,6 +97,17 @@ internal class PlaybackSelection(
         return best(inVoice.ifEmpty { candidates }, state)
     }
 
+    /**
+     * The backup addresses that still apply.
+     *
+     * A source ships them for the stream it was asked about, so they address the launched
+     * episode and no other. Falling back to them from a different episode plays the wrong
+     * episode - and resumes it at the position the viewer left the first one at, which is how
+     * this was found.
+     */
+    fun reserves(state: SelectionState, launched: List<String>): List<String> =
+        if (state.leftLaunchedStream) emptyList() else launched
+
     fun pickVoice(state: SelectionState, voice: String): Stream? =
         best(voices(state)[voice].orEmpty(), state)
 
