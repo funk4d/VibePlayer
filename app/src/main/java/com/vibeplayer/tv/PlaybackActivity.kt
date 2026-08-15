@@ -1394,22 +1394,34 @@ class PlaybackActivity : Activity() {
             "Source returned ${duration}ms of media - too short for a title; " +
                 "this is what a refusal notice looks like source=${request?.sourceName ?: "unknown"}",
         )
-        // Three goes at getting real media, then whatever arrives is what the viewer sees.
-        // Each go prefers an address we have not tried: a backup the source shipped, then
-        // another quality, and only failing those the same address again - which is what
-        // retrying by hand in Lampa does, and it often works.
+        // The source answers the same address inconsistently: measured on the device, two
+        // requests seconds apart returned the notice and the third returned the film, with no
+        // headers involved at all. Asking again is therefore the treatment, and it goes first -
+        // spending the budget on a backup address instead is what left nothing playing, because
+        // the backups this source ships answer with an error.
         if (stubRetries >= MAX_STUB_RETRIES) {
             Log.w(TAG, "Refusal notice - out of attempts, showing what arrived")
             return
         }
         stubRetries += 1
         val attempt = "${stubRetries + 1}/${MAX_STUB_RETRIES + 1}"
+        val position = (player?.currentPosition ?: restorePositionMs)
+            .takeIf { it > STUB_MEDIA_MAX_MS } ?: restorePositionMs
 
+        if (stubRetries <= SAME_ADDRESS_ATTEMPTS) {
+            Log.w(TAG, "Refusal notice - attempt $attempt asking the same address again")
+            showPersistentStatus("Source refused the stream — asking again…")
+            releasePlayer()
+            mainHandler.postDelayed({ if (isStarted) startPlayback(position) }, STUB_RETRY_DELAY_MS)
+            return
+        }
+
+        // Only once the same address has had its chances is another one worth the time.
         val backup = sourceLadder?.next(SourceFailure.UNAVAILABLE)
         if (backup != null) {
             Log.w(TAG, "Refusal notice - attempt $attempt via ${backup.kind}")
             showPersistentStatus("Source refused the stream — trying a backup…")
-            startPlayback(restorePositionMs)
+            startPlayback(position)
             return
         }
 
@@ -1421,8 +1433,6 @@ class PlaybackActivity : Activity() {
             return
         }
 
-        val position = (player?.currentPosition ?: restorePositionMs)
-            .takeIf { it > STUB_MEDIA_MAX_MS } ?: restorePositionMs
         Log.w(TAG, "Refusal notice - attempt $attempt asking the same address again")
         showPersistentStatus("Source refused the stream — asking again…")
         releasePlayer()
@@ -1769,8 +1779,9 @@ class PlaybackActivity : Activity() {
         const val FIRST_FRAME_TIMEOUT_MS = 7_000L
         const val STATUS_TIMEOUT_MS = 2_500L
         const val STUB_MEDIA_MAX_MS = 60_000L
-        const val MAX_STUB_RETRIES = 2
-        const val STUB_RETRY_DELAY_MS = 1_500L
+        const val MAX_STUB_RETRIES = 4
+        const val SAME_ADDRESS_ATTEMPTS = 3
+        const val STUB_RETRY_DELAY_MS = 2_000L
         const val RAW_LABEL_LOG_LIMIT = 14
         const val MAX_RAW_LABEL_LENGTH = 70
         const val CONTROLS_TIMEOUT_MS = 8_000L
