@@ -20,6 +20,7 @@ internal data class PlaybackRequest(
     val qualityVariants: List<QualityVariant>,
     val reserveUrls: List<String> = emptyList(),
     val bridgeProbe: String? = null,
+    val bridgeVersion: String? = null,
     val currentEpisode: EpisodeVariantInfo? = null,
 ) {
     val safeLocation: String
@@ -67,6 +68,7 @@ internal data class PlaybackRequest(
                 qualityVariants = QualityVariantParser.fromIntent(intent),
                 reserveUrls = QualityVariantParser.reservesFromIntent(intent),
                 bridgeProbe = bridgeMetadata?.probe,
+                bridgeVersion = bridgeMetadata?.bridgeVersion,
                 currentEpisode = bridgeMetadata?.episode?.let { number ->
                     EpisodeVariantInfo(
                         season = bridgeMetadata.season ?: 0,
@@ -148,6 +150,8 @@ internal data class BridgeMetadata(
     val season: Int? = null,
     val episode: Int? = null,
     val voice: String? = null,
+    /** Which build of the bridge composed this launch. */
+    val bridgeVersion: String? = null,
 )
 
 internal object QualityVariantParser {
@@ -249,7 +253,7 @@ internal object QualityVariantParser {
     internal fun parseMetadataLabel(rawLabel: String): BridgeMetadata? {
         val trimmed = rawLabel.trim()
         if (!trimmed.startsWith(METADATA_PREFIX)) return null
-        val parts = trimmed.removePrefix(METADATA_PREFIX).split('|', limit = 6)
+        val parts = trimmed.removePrefix(METADATA_PREFIX).split('|', limit = 7)
         if (parts.size < 2) return null
         return runCatching {
             val title = URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
@@ -260,7 +264,8 @@ internal object QualityVariantParser {
             val voice = parts.getOrNull(5)
                 ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
                 ?.ifEmpty { null }
-            BridgeMetadata(title, source, probe, season, episode, voice)
+            val version = parts.getOrNull(6)?.trim()?.takeIf { it.matches(VERSION_FORMAT) }
+            BridgeMetadata(title, source, probe, season, episode, voice, version)
                 .takeIf { it.title != null || it.source != null || probe != null }
         }.getOrNull()
     }
@@ -329,6 +334,7 @@ internal object QualityVariantParser {
     private const val RESERVE_PREFIX = "@VIBERESERVE@"
 
     /** Structural counters only, so nothing from a stream URL can reach a log through here. */
+    private val VERSION_FORMAT = Regex("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")
     private val PROBE_FORMAT = Regex("c[01]p\\d{1,4}v\\d{1,4}f\\d{1,4}(s\\d{1,4}w\\d{1,4})?")
 }
 

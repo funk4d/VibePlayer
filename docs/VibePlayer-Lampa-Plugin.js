@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.25.0';
+    var BRIDGE_VERSION = '0.26.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -131,7 +131,8 @@
             encodeURIComponent(source || '') + '|' + probe + '|' +
             integer(data && data.season, 0) + '|' +
             integer(data && data.episode, 0) + '|' +
-            encodeURIComponent(plainText(data && data.voice_name) || '');
+            encodeURIComponent(plainText(data && data.voice_name) || '') + '|' +
+            BRIDGE_VERSION;
     }
 
     // A compact, URL-free description of what the capture actually held: matched, playlist
@@ -240,9 +241,6 @@
         if (userAgent) headers['User-Agent'] = userAgent;
         var language = window.navigator && nonEmptyString(window.navigator.language);
         if (language) headers['Accept-Language'] = language;
-        // Headers reach the player; labels added to data.quality may not. This is the one
-        // channel that reliably answers "which bridge is actually loaded on the device".
-        headers['X-Vibe-Bridge'] = BRIDGE_VERSION;
         return headers;
     }
 
@@ -845,15 +843,6 @@
             }
             window.VibePlayerBridge.lastStats = stats;
             window.VibePlayerBridge.lastSource = sourceSummary();
-            if (data && data.headers && typeof data.headers === 'object') {
-                data.headers['X-Vibe-Stats'] = 'e' + stats.episodes.serialized +
-                    'v' + stats.voiceovers.serialized +
-                    'm' + stats.mirrored +
-                    's' + window.VibePlayerBridge.lastSource.items +
-                    'w' + window.VibePlayerBridge.lastSource.withStream +
-                    'q' + (data.quality ? Object.keys(data.quality).length : 0) +
-                    'l' + (Array.isArray(data.playlist) ? data.playlist.length : 0);
-            }
             return original.call(this, link, data ? encodePayload(payload, data) : payload);
         };
         wrapped.__vibeOriginal = original;
