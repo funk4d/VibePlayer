@@ -107,8 +107,13 @@ internal object PlayerFactory {
             .post(true)
             .resolvePrivateAddresses(true)
             .build()
+        // Resolve the way every other player on this television resolves, and fall back to
+        // DNS-over-HTTPS only when the platform resolver actually fails. Resolving elsewhere
+        // reaches different addresses of the same host - ours answered on 188.114.96.10 where
+        // the system resolver gives .11 - and a source that hands out addresses tied to what
+        // it saw has no reason to recognise a client arriving somewhere else.
         val httpClient = bootstrapClient.newBuilder()
-            .dns(dnsOverHttps)
+            .dns(SystemFirstDns(dnsOverHttps))
             .eventListener(ConnectionLogger)
             .build()
 
@@ -149,6 +154,22 @@ internal object PlayerFactory {
             .setUri(source.url)
             .apply { source.mimeType?.let(::setMimeType) }
             .build()
+    }
+
+    /**
+     * The platform resolver, with DNS-over-HTTPS kept in reserve.
+     *
+     * This television's own DNS has failed before, which is why the encrypted resolver is here
+     * at all. But using it first makes this the only player on the device resolving differently
+     * from the rest, and the difference is visible: the same host answers on another address.
+     */
+    private class SystemFirstDns(private val fallback: okhttp3.Dns) : okhttp3.Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val system = runCatching { okhttp3.Dns.SYSTEM.lookup(hostname) }.getOrNull()
+            if (!system.isNullOrEmpty()) return system
+            Log.w("VibePlayer", "System DNS did not resolve $hostname; falling back to DoH")
+            return fallback.lookup(hostname)
+        }
     }
 
     private const val FALLBACK_USER_AGENT = "VibePlayer/0.28 (TCL EP680; Android 9)"

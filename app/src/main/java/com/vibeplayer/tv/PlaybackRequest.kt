@@ -335,7 +335,7 @@ internal object QualityVariantParser {
 
     /** Structural counters only, so nothing from a stream URL can reach a log through here. */
     private val VERSION_FORMAT = Regex("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")
-    private val PROBE_FORMAT = Regex("c[01]p\\d{1,4}v\\d{1,4}f\\d{1,4}(s\\d{1,4}w\\d{1,4})?")
+    private val PROBE_FORMAT = Regex("c[01]p\\d{1,4}v\\d{1,4}f\\d{1,4}(n\\d{1,4})?(s\\d{1,4}w\\d{1,4})?")
 }
 
 internal object LocationRedactor {

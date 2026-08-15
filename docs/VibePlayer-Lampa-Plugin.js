@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.26.0';
+    var BRIDGE_VERSION = '0.27.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -145,6 +145,9 @@
             'p' + summary.playlistCount +
             'v' + summary.voiceoverCount +
             'f' + summary.fields.length +
+            // How many voices the source's own structure held, which is what tells a source
+            // with one voice apart from a structure we failed to capture.
+            'n' + source.voices.length +
             // What the source itself yielded: entries seen, and how many had a usable
             // address. A balancer that serialises nothing is one of these two being zero.
             's' + source.items +

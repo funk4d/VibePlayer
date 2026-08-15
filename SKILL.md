@@ -45,6 +45,7 @@ These facts were read from the actual television over ADB on 2026-08-02. Recheck
 - Hardware audio decoder `OMX.RTK.audio.decoder` advertises AC-3, E-AC-3, AC-4, DTS, DTS-HD, and DTS-HD LBR; Google decoders cover AAC, MP3, Vorbis, Opus, FLAC, and common PCM formats
 - The firmware exposes `DynamicsProcessing` through `/vendor/lib/soundfx/libdynproc.so`, but the real API rejects construction with `AudioEffect: bad parameter value`. Treat the effect as broken, not available.
 - The active media output is the analog headphone device
+- A source can answer the same address inconsistently, and a refusal is not always about the request. Before changing what is sent, replay the exact address from a desktop on the same connection: with the player's headers, without them, with the token issued to this player and with the one issued to Lampa's own. All four returning the real stream rules out headers, token, address and network in one pass, and leaves only what the device does differently.
 - The hardware decoder corrupts some streams when its frames go straight into a surface - torn macroblocks and colour noise over a stream the log calls ordinary, with no error reported anywhere. The same stream through a texture view decodes cleanly, and the built-in Lampa player renders it without trouble. The vendor codec XML has the decoder's alignment limits commented out, and the widths seen doing this are not multiples of sixteen. Texture output is therefore the default video path; surface and software remain selectable for comparison.
 - Software H.264 decodes those streams correctly at roughly one frame per second, which confirms the data and rules out the pipeline, but is not a playback option.
 - The four-core CPU is fully saturated by four dav1d workers on a measured 3840x2160 23.976 fps AV1 10-bit stream. It dropped 102 frames in the first 5 seconds even with Media3's recommended decoder GL output. 4K AV1 software playback is not viable.
@@ -195,9 +196,12 @@ Treat a duration that short on a film or an episode as a refusal and say so in t
 The token is issued to whatever address the WebView presented. An external player that resolves
 differently arrives as a different client:
 
-- Resolve both address families. A DNS-over-HTTPS resolver pinned to IPv4 while the host also
-  publishes AAAA records puts the player on a different public address than the WebView, which
-  is exactly a token mismatch. Log the family each media host was reached over.
+- **Resolve names the way the rest of the device does.** A DNS-over-HTTPS resolver reaches
+  different addresses of the same host than the platform resolver - measured here as
+  188.114.96.10 against .11 - and that alone was enough for a source to answer every request
+  with its refusal notice while every other player on the television played normally. Keep the
+  encrypted resolver as a fallback for when the platform one genuinely fails, which is why it
+  was added, and never as the first choice. Log the address each media host was reached over.
 - Carry the browser context forward — user agent, origin, referer, language — and let anything
   the source itself supplied win over it.
 - Never add a second value for a header the data source already sets.
