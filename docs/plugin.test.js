@@ -129,7 +129,7 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.34.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.35.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
@@ -138,7 +138,7 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.34.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.35.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -202,7 +202,7 @@ const unrelated = JSON.parse(forwardedPayload);
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 // Only the diagnostic label, carrying no title, no source and no stream of its own.
-assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.34.0']);
+assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.35.0']);
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
 // 10 top-level fields (including the current MODS `translate` collection). It must never
@@ -272,7 +272,10 @@ const modernSourceComponent = {
     setFlowsForItem: (value) => value,
     getFileUrl: (value) => value && value.method === 'call'
         ? 'https://media.example/modern-call.m3u8'
-        : value
+        : value,
+    fetchFileUrl: () => ({
+        then: (resolve) => resolve('https://media.example/modern-async.m3u8')
+    })
 };
 const modernContext = {
     console: { info: () => {}, warn: () => {} },
@@ -321,6 +324,14 @@ modernSourceComponent.getFileUrl({
     episode: 1,
     title: 'First'
 });
+modernSourceComponent.fetchFileUrl({
+    method: 'call',
+    url: 'https://mods.example/resolve-async',
+    voice_name: 'Async Voice',
+    season: 1,
+    episode: 1,
+    title: 'First'
+});
 modernContext.Lampa.Player.play({ url: 'https://media.example/modern-dub.m3u8', season: 1, episode: 1, playlist: [] });
 modernContext.Lampa.Android.openPlayer(
     'https://media.example/modern-dub.m3u8',
@@ -331,6 +342,7 @@ const modernLabels = Object.keys(modernOutput.quality);
 assert(modernLabels.some((label) => label.startsWith('@VIBEVOICE@Dub%20Voice|1080p')));
 assert(modernLabels.some((label) => label.startsWith('@VIBEVOICE@Original|1080p')));
 assert(modernLabels.some((label) => label.startsWith('@VIBEVOICE@Call%20Voice|Auto')));
+assert(modernLabels.some((label) => label.startsWith('@VIBEVOICE@Async%20Voice|Auto')));
 assert(modernLabels.some((label) => label.startsWith('@VIBEEPISODE@1|1|0|0|First|1080p|Dub%20Voice')));
 assert(modernLabels.some((label) => label.startsWith('@VIBEEPISODE@1|1|0|0|First|1080p|Original')));
 

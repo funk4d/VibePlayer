@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.34.0';
+    var BRIDGE_VERSION = '0.35.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -823,6 +823,24 @@
         });
     }
 
+    function observeSourceResult(method, result, args) {
+        collectSourceValue(result, 0, null);
+        Array.prototype.slice.call(args).forEach(function (value) {
+            collectSourceValue(value, 0, null);
+        });
+        rememberResolvedResult(method, result, args);
+
+        // MODS may return a promise that it has already started because of the user's normal
+        // UI action. Attach a passive continuation so the resolved object is captured too;
+        // this continuation does not create or retry the underlying request.
+        if (result && typeof result.then === 'function') {
+            result.then(function (resolved) {
+                collectSourceValue(resolved, 0, null);
+                rememberResolvedResult(method, resolved, args);
+            }, function () { /* source's own failure */ });
+        }
+    }
+
     function wrapComponentMethod(component, name, observer) {
         var current = component[name];
         if (typeof current !== 'function') return false;
@@ -902,20 +920,17 @@
             wrapComponentMethod(component, 'parse', rememberFolder);
             wrapComponentMethod(component, 'toPlayElement', rememberItem);
 
-            // The current MODS methods resolve or reshape source entries synchronously. Observe
-            // both arguments and return values after the original method has run, so mutated
-            // flow objects are captured without changing the method's behaviour.
+            // The current MODS methods resolve or reshape source entries synchronously or return
+            // a promise started by the user's UI action. Observe both arguments and return
+            // values after the original method has run, without changing its behaviour.
             [
                 'build', 'startSource', 'lifeSource', 'createSource', 'create', 'request',
                 'setFlowsForQuality', 'setFlowsForItem', 'getExternalPlayUrl',
-                'normalizeExternalPlayFile', 'getFileUrl', 'applyPlayerDisplayTitle'
+                'normalizeExternalPlayFile', 'getFileUrl', 'fetchFileUrl', 'changeQuality',
+                'applyPlayerDisplayTitle'
             ].forEach(function (name) {
                 wrapComponentMethodAfter(component, name, function (result, args) {
-                    collectSourceValue(result, 0, null);
-                    Array.prototype.slice.call(args).forEach(function (value) {
-                        collectSourceValue(value, 0, null);
-                    });
-                    rememberResolvedResult(name, result, args);
+                    observeSourceResult(name, result, args);
                 });
             });
         });
