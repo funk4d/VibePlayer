@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.35.0';
+    var BRIDGE_VERSION = '0.36.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -584,15 +584,20 @@
             /^\d+$/.test(key);
     }
 
+    function voiceMapContainerKey(key) {
+        return /^(folder|voiceovers?|voices|translate|translations?|dubs?|flow|flows)$/i.test(key);
+    }
+
     /**
      * MODS has shipped voice choices as arrays, but the newer component keeps them in maps
      * such as translate["ColdFilm"] or flows["Original"].  Flatten only those already-loaded
      * objects.  No network call is made here; a playable object is just remembered for the
      * same Intent serialisation used by the older payload shape.
      */
-    function appendArrayValues(target, value, fallback, depth, seen) {
+    function appendArrayValues(target, value, fallback, depth, seen, voiceMap) {
         depth = depth || 0;
         if (!value || typeof value !== 'object' || depth > 6) return;
+        voiceMap = Boolean(voiceMap);
         if (!seen) seen = [];
         if (seen.indexOf(value) !== -1) return;
         seen.push(value);
@@ -603,7 +608,7 @@
         }
         if (Array.isArray(value)) {
             value.forEach(function (item) {
-                appendArrayValues(target, item, fallback, depth + 1, seen);
+                appendArrayValues(target, item, fallback, depth + 1, seen, voiceMap);
             });
             return;
         }
@@ -612,10 +617,11 @@
             var child = value[key];
             if (!child || typeof child !== 'object') return;
             var nextFallback = fallback;
-            // Unknown keys directly below a recognised container are voice names.  Keep an
-            // existing explicit/folder voice ahead of a generic map key.
-            if (!voiceoverContainerKey(key)) nextFallback = fallback || plainText(key);
-            appendArrayValues(target, child, nextFallback, depth + 1, seen);
+            var nextVoiceMap = voiceMap || voiceMapContainerKey(key);
+            // Unknown keys directly below a voice map are names. Keep an existing
+            // explicit/folder voice ahead of a generic map key.
+            if (voiceMap && !voiceoverContainerKey(key)) nextFallback = fallback || plainText(key);
+            appendArrayValues(target, child, nextFallback, depth + 1, seen, nextVoiceMap);
         });
     }
 
@@ -649,10 +655,10 @@
 
     function serializeVoiceovers(data) {
         var voiceovers = [];
-        appendArrayValues(voiceovers, data.voiceovers);
-        appendArrayValues(voiceovers, data.translate);
-        appendArrayValues(voiceovers, data.translations);
-        appendArrayValues(voiceovers, data.dubs);
+        appendArrayValues(voiceovers, data.voiceovers, null, 0, null, true);
+        appendArrayValues(voiceovers, data.translate, null, 0, null, true);
+        appendArrayValues(voiceovers, data.translations, null, 0, null, true);
+        appendArrayValues(voiceovers, data.dubs, null, 0, null, true);
 
         var qualities = Object.assign({}, data.quality || {});
         Object.keys(qualities).forEach(function (label) {
@@ -768,9 +774,10 @@
      * flow maps and component data instead.  This collector is deliberately bounded and
      * read-only: it never invokes a function, follows a promise or performs a request.
      */
-    function collectSourceValue(value, depth, fallback, seen) {
+    function collectSourceValue(value, depth, fallback, seen, voiceMap) {
         depth = depth || 0;
         if (!value || typeof value !== 'object' || depth > 6) return;
+        voiceMap = Boolean(voiceMap);
         if (!seen) seen = typeof WeakSet === 'function' ? new WeakSet() : [];
 
         if (typeof seen.has === 'function') {
@@ -789,7 +796,7 @@
 
         if (Array.isArray(value)) {
             value.forEach(function (entry) {
-                collectSourceValue(entry, depth + 1, fallback, seen);
+                collectSourceValue(entry, depth + 1, fallback, seen, voiceMap);
             });
             return;
         }
@@ -798,10 +805,11 @@
             var child = value[key];
             if (!child || typeof child !== 'object') return;
             var nextFallback = fallback;
-            // Unknown keys below a known source container are normally voice names
+            var nextVoiceMap = voiceMap || voiceMapContainerKey(key);
+            // Unknown keys below a voice map are normally voice names
             // (translate["Dub"], flows["Original"], folder["ColdFilm"], ...).
-            if (!voiceoverContainerKey(key)) nextFallback = fallback || plainText(key);
-            collectSourceValue(child, depth + 1, nextFallback, seen);
+            if (voiceMap && !voiceoverContainerKey(key)) nextFallback = fallback || plainText(key);
+            collectSourceValue(child, depth + 1, nextFallback, seen, nextVoiceMap);
         });
     }
 
@@ -913,7 +921,7 @@
                 'voiceovers', 'voices', 'translate', 'translations', 'dubs', 'qualities'
             ].forEach(function (key) {
                 if (component[key] && typeof component[key] === 'object') {
-                    collectSourceValue(component[key], 0, null);
+                    collectSourceValue(component[key], 0, null, null, voiceMapContainerKey(key));
                 }
             });
 
