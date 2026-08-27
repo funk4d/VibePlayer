@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.27.0';
+    var BRIDGE_VERSION = '0.28.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -73,6 +73,29 @@
             if (found) return found;
         }
         return null;
+    }
+
+    // MODS has used both `voice_name` and `voice` over its lifetime.  Other online
+    // components call the same thing a translation, dub or language.  Keep this
+    // normalisation in the bridge so the Android side never has to know which source
+    // happened to produce the object.
+    function explicitVoiceName(item) {
+        if (!item || typeof item !== 'object') return null;
+        return firstDisplayName([
+            item.voice_name,
+            item.voice,
+            item.voiceover,
+            item.translation,
+            item.dubbing,
+            item.dub,
+            item.language
+        ]);
+    }
+
+    function itemVoiceName(item, fallback) {
+        return explicitVoiceName(item) ||
+            (sourceItemVoices && item && typeof item === 'object' && sourceItemVoices.get(item)) ||
+            plainText(fallback);
     }
 
     function activeMovie() {
@@ -214,6 +237,9 @@
         if (!current) return 0;
 
         var merged = Object.assign({}, current.quality || {});
+        Object.keys(merged).forEach(function (label) {
+            if (isBridgeLabel(label)) delete merged[label];
+        });
         if (!Object.keys(merged).length) {
             var own = itemStream(current) || expectedUrl;
             if (own) merged[plainText(current.quality_label) || 'Auto'] = own;
@@ -269,7 +295,7 @@
     // Describes the whole card and stays true for every entry inside it.
     var SESSION_FIELDS = [
         'title', 'movie_title', 'source_name', 'provider_name', 'balancer_name',
-        'source', 'provider', 'balancer', 'online', 'voiceovers', 'playlist',
+        'source', 'provider', 'balancer', 'online', 'voiceovers', 'translate', 'playlist',
         'subtitles', 'subtitle', 'tracks', 'poster'
     ];
 
@@ -333,10 +359,11 @@
 
     function voiceoverName(item, index) {
         if (!item || typeof item !== 'object') return 'Voiceover ' + (index + 1);
-        return nonEmptyString(item.label) ||
-            nonEmptyString(item.title) ||
-            nonEmptyString(item.name) ||
-            nonEmptyString(item.language) ||
+        return itemVoiceName(item) ||
+            plainText(item.label) ||
+            plainText(item.title) ||
+            plainText(item.name) ||
+            plainText(item.language) ||
             ('Voiceover ' + (index + 1));
     }
 
@@ -367,7 +394,7 @@
             encodeURIComponent(quality || 'Auto'),
             // The voice belongs to the entry: without it the player cannot answer "which
             // voices exist for the episode I just switched to".
-            encodeURIComponent(plainText(item && item.voice_name) || ''),
+            encodeURIComponent(itemVoiceName(item) || ''),
             // Lampa identifies an episode in its timeline by this hash. The player reports
             // progress against it for episodes chosen after launch.
             encodeURIComponent(nonEmptyString(timeline.hash) || ''),
@@ -391,6 +418,9 @@
      */
     function itemQualities(item) {
         var qualities = item && (item.qualitys || item.qualities);
+        if (!qualities && item && item.quality && typeof item.quality === 'object' && !Array.isArray(item.quality)) {
+            qualities = item.quality;
+        }
         var found = [];
 
         if (Array.isArray(qualities)) {
@@ -401,6 +431,7 @@
             });
         } else if (qualities && typeof qualities === 'object') {
             Object.keys(qualities).forEach(function (label) {
+                if (isBridgeLabel(label)) return;
                 var url = streamUrl(qualities[label]);
                 if (url) found.push({ label: plainText(label) || 'Auto', url: url });
             });
@@ -426,13 +457,23 @@
         var playlist = Array.isArray(data.playlist) ? data.playlist : [];
         var qualities = Object.assign({}, data.quality || {});
         var seen = {};
+        var seenEpisodes = {};
         var serialized = 0;
+
+        // The object can be handed to openPlayer more than once, and an older bridge may
+        // already have left episode labels in it.  Keep the source's real qualities, but
+        // rebuild our transport labels from the current capture so a malformed old label
+        // cannot survive and crash the Android menu.
+        Object.keys(qualities).forEach(function (label) {
+            if (label.indexOf(EPISODE_PREFIX) === 0) delete qualities[label];
+        });
 
         items.forEach(function (item) {
             var number = episodeNumber(item);
             if (!number) return;
-            var voice = plainText(item.voice_name) || '';
+            var voice = itemVoiceName(item) || '';
             var base = voice + '|' + integer(item.season, 0) + 'x' + number;
+            seenEpisodes[base] = true;
 
             itemQualities(item).forEach(function (entry) {
                 var key = base + '|' + entry.label;
@@ -447,10 +488,14 @@
         playlist.forEach(function (item) {
             if (!item || typeof item !== 'object') return;
             var number = episodeNumber(item);
-            if (!number || seen[integer(item.season, 0) + 'x' + number]) return;
+            var voice = itemVoiceName(item) || '';
+            var base = voice + '|' + integer(item.season, 0) + 'x' + number;
+            if (!number || seenEpisodes[base]) return;
+            seenEpisodes[base] = true;
             var variants = item.quality;
             if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
                 Object.keys(variants).forEach(function (quality) {
+                    if (isBridgeLabel(quality)) return;
                     var url = streamUrl(variants[quality]);
                     if (!url) return;
                     qualities[episodeLabel(item, quality)] = url;
@@ -534,31 +579,91 @@
         return candidates.length;
     }
 
+    function appendArrayValues(target, value) {
+        if (Array.isArray(value)) {
+            value.forEach(function (item) { target.push(item); });
+            return;
+        }
+        if (!value || typeof value !== 'object') return;
+        // `translate` in the current MODS payload is a container, while older payloads
+        // exposed the same entries as `voiceovers`.  Track/subtitle arrays are metadata,
+        // not source voice choices, so deliberately leave those branches alone.
+        ['voiceovers', 'voices', 'translations', 'dubs', 'items'].forEach(function (key) {
+            if (Array.isArray(value[key])) value[key].forEach(function (item) { target.push(item); });
+        });
+    }
+
+    function addVoiceoverItem(target, item, index) {
+        if (!item || typeof item !== 'object') return 0;
+        var name = voiceoverName(item, index);
+        var variants = item.quality || item.qualitys || item.qualities ||
+            item.files || item.streams || item.sources;
+        var added = 0;
+
+        if (Array.isArray(variants)) {
+            variants.forEach(function (entry) {
+                var label = plainText(entry && (entry.label || entry.quality || entry.name)) || 'Auto';
+                added += addVariant(target, name, label, entry);
+            });
+        } else if (variants && typeof variants === 'object') {
+            Object.keys(variants).forEach(function (quality) {
+                if (isBridgeLabel(quality)) return;
+                added += addVariant(target, name, quality, variants[quality]);
+            });
+        } else {
+            added += addVariant(
+                target,
+                name,
+                item.quality_label || item.resolution || 'Auto',
+                item,
+            );
+        }
+        return added;
+    }
+
     function serializeVoiceovers(data) {
-        var voiceovers = Array.isArray(data.voiceovers) ? data.voiceovers : [];
+        var voiceovers = [];
+        appendArrayValues(voiceovers, data.voiceovers);
+        appendArrayValues(voiceovers, data.translate);
+        appendArrayValues(voiceovers, data.translations);
+        appendArrayValues(voiceovers, data.dubs);
+
         var qualities = Object.assign({}, data.quality || {});
+        Object.keys(qualities).forEach(function (label) {
+            if (label.indexOf(LABEL_PREFIX) === 0) delete qualities[label];
+        });
         var serialized = 0;
 
         voiceovers.forEach(function (item, index) {
-            if (!item || typeof item !== 'object') return;
-            var name = voiceoverName(item, index);
-            var variants = item.quality || item.qualities || item.files || item.streams;
-
-            if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
-                Object.keys(variants).forEach(function (quality) {
-                    serialized += addVariant(qualities, name, quality, variants[quality]);
-                });
-            } else {
-                serialized += addVariant(qualities, name, item.quality_label || item.resolution || 'Auto', item);
-            }
+            serialized += addVoiceoverItem(qualities, item, index);
         });
+
+        // A series source normally keeps the alternatives in folder[voice][season] rather
+        // than in data.voiceovers.  Include only the episode being launched; serialising every
+        // episode as a standalone voice would mix sources and make the menu lie.
+        var currentSeason = integer(data && data.season, -1);
+        var currentEpisode = integer(data && data.episode, -1);
+        var sourceVoiceovers = 0;
+        if (currentEpisode > 0) {
+            allSourceItems().forEach(function (item) {
+                var name = itemVoiceName(item);
+                if (!name || integer(item && item.episode, -1) !== currentEpisode) return;
+                if (currentSeason >= 0 && integer(item && item.season, -1) !== currentSeason) return;
+                sourceVoiceovers += 1;
+                serialized += addVoiceoverItem(qualities, item, sourceVoiceovers);
+            });
+        }
 
         if (serialized) data.quality = qualities;
 
         // Deliberately log structure counts only. Stream URLs and authorization data must never
         // appear in WebView/ADB logs.
-        console.info('[VibePlayer] voiceovers=' + voiceovers.length + ' serialized=' + serialized);
-        return { total: voiceovers.length, serialized: serialized };
+        console.info(
+            '[VibePlayer] voiceovers=' + voiceovers.length +
+            ' source=' + sourceVoiceovers +
+            ' serialized=' + serialized,
+        );
+        return { total: voiceovers.length + sourceVoiceovers, serialized: serialized };
     }
 
     // ---------------------------------------------------------------------------------
@@ -577,6 +682,10 @@
     var sourceItems = [];
     var sourceFolder = null;
     var folderCard = null;
+    // Folder voice names are the only context that is not repeated on every episode object.
+    // Keep that context out of the source's own objects: mutating them changes what Lampa's
+    // built-in player sees and makes a diagnostic bridge an accidental source plugin.
+    var sourceItemVoices = typeof WeakMap === 'function' ? new WeakMap() : null;
 
     var hookHits = {};
 
@@ -600,13 +709,28 @@
 
     function itemStream(item) {
         if (!item || typeof item !== 'object') return null;
-        // A resolved address wins; `url` may be an API endpoint rather than media, and the
-        // component's own external-player helper prefers `stream` for exactly that reason.
-        return nonEmptyString(item.stream) || nonEmptyString(item.url);
+        // A resolved address wins.  `url` on a call-style item is an API endpoint, not media;
+        // the quality map is handled separately by itemQualities below.
+        return nonEmptyString(item.stream) ||
+            nonEmptyString(item.src) ||
+            nonEmptyString(item.file) ||
+            nonEmptyString(item.link) ||
+            nonEmptyString(item.path) ||
+            (item.method === 'call' ? null : nonEmptyString(item.url));
+    }
+
+    function itemHasPlayableAddress(item) {
+        return Boolean(itemStream(item) || itemQualities(item).length);
+    }
+
+    function rememberSourceVoice(item, fallback) {
+        var voice = plainText(fallback);
+        if (!sourceItemVoices || !item || typeof item !== 'object' || !voice) return;
+        if (!explicitVoiceName(item)) sourceItemVoices.set(item, voice);
     }
 
     function rememberItem(item) {
-        if (!item || typeof item !== 'object' || !itemStream(item)) return;
+        if (!item || typeof item !== 'object' || !itemHasPlayableAddress(item)) return;
         if (sourceItems.length >= MAX_SOURCE_ITEMS) return;
         if (sourceItems.indexOf(item) === -1) sourceItems.push(item);
     }
@@ -634,7 +758,9 @@
         // { voice: [...], season: [...], folder: { voice: { season: [ episodes ] } } }.
         // Every episode in there already carries a direct stream, for every voice and every
         // season, which is the whole catalogue the source has to offer at zero further cost.
-        var folder = value && typeof value === 'object' ? value.folder : null;
+        var folder = value && typeof value === 'object'
+            ? value.folder || (value.data && value.data.folder) || (value.result && value.result.folder)
+            : null;
         if (!folder || typeof folder !== 'object') return;
 
         // Answers arrive in parts - one season, one voice - and the component is rebuilt
@@ -668,20 +794,34 @@
         if (!folder || typeof folder !== 'object') return [];
         var items = [];
 
+        function addItem(item, voice) {
+            if (!item || typeof item !== 'object' || !itemHasPlayableAddress(item)) return;
+            rememberSourceVoice(item, voice);
+            if (items.length < MAX_SOURCE_ITEMS && items.indexOf(item) === -1) items.push(item);
+        }
+
+        function isStructuralKey(key) {
+            return /^(folder|data|result|items?|playlist|qualities?|streams?|episodes?|seasons?)$/i.test(key) ||
+                /^\d+$/.test(key);
+        }
+
         function collect(value, depth, voice) {
             if (items.length >= MAX_SOURCE_ITEMS || !value || typeof value !== 'object') return;
+            if (!Array.isArray(value) && episodeNumber(value) && itemHasPlayableAddress(value)) {
+                addItem(value, voice);
+                return;
+            }
             if (Array.isArray(value)) {
                 value.forEach(function (entry) {
-                    if (!entry || typeof entry !== 'object' || !itemStream(entry)) return;
-                    if (!nonEmptyString(entry.voice_name) && voice) entry.voice_name = voice;
-                    if (items.length < MAX_SOURCE_ITEMS) items.push(entry);
+                    addItem(entry, voice);
                 });
                 return;
             }
-            if (depth > 2) return;
+            if (depth > 5) return;
             Object.keys(value).forEach(function (key) {
-                // The first level of the folder is the voice name itself.
-                collect(value[key], depth + 1, depth === 0 ? key : voice);
+                // The first non-structural level of the folder is the voice name itself.
+                var nextVoice = voice || (depth === 0 && !isStructuralKey(key) ? plainText(key) : null);
+                collect(value[key], depth + 1, nextVoice);
             });
         }
 
@@ -703,14 +843,14 @@
         var voices = [];
         var seasons = [];
         items.forEach(function (item) {
-            var voice = nonEmptyString(item.voice_name);
+            var voice = itemVoiceName(item);
             if (voice && voices.indexOf(voice) === -1) voices.push(voice);
             var season = integer(item.season, -1);
             if (season >= 0 && seasons.indexOf(season) === -1) seasons.push(season);
         });
         return {
             items: items.length,
-            withStream: items.filter(itemStream).length,
+            withStream: items.filter(itemHasPlayableAddress).length,
             voices: voices,
             seasons: seasons.sort(function (a, b) { return a - b; }),
             folderKeys: sourceFolder && typeof sourceFolder === 'object'

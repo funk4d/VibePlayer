@@ -45,7 +45,8 @@ const captured = {
     },
     quality: {
         '1080p': 'https://media.example/current.m3u8',
-        '720p': 'https://media.example/current-720.m3u8'
+        '720p': 'https://media.example/current-720.m3u8',
+        '@VIBEEPISODE@1|1|0|29|Old%20shape|': 'https://media.example/old-shape.m3u8'
     },
     quality_reserve: {
         '1080p': 'https://backup.example/current-1080.mp4',
@@ -55,6 +56,13 @@ const captured = {
         title: 'Dub',
         quality: {
             '720p': 'https://media.example/dub-720.m3u8'
+        }
+    }],
+    // Current MODS calls this collection `translate`; it is not `voiceovers`.
+    translate: [{
+        title: 'ColdFilm',
+        quality: {
+            '720p': 'https://media.example/cold-720.m3u8'
         }
     }],
     playlist: [{
@@ -86,7 +94,9 @@ const labels = Object.keys(forwarded.quality);
 assert(labels.includes('1080p'));
 assert(labels.some((label) => label.startsWith('@VIBEMETA@The%20Series|Alloha')));
 assert(labels.some((label) => label.startsWith('@VIBEVOICE@Dub|720p')));
+assert(labels.some((label) => label.startsWith('@VIBEVOICE@ColdFilm|720p')));
 assert(labels.some((label) => label.startsWith('@VIBEEPISODE@1|2|94|122|Second%20Episode|1080p')));
+assert(!labels.some((label) => label === '@VIBEEPISODE@1|1|0|29|Old%20shape|'));
 // Markup from the page must never reach the player's overlay.
 const episodeLabel = labels.find((label) => label.startsWith('@VIBEEPISODE@1|2|'));
 assert.equal(episodeLabel.split('|')[6], 'Dub%20HD');
@@ -119,7 +129,7 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.27.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.28.0');
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
@@ -128,7 +138,7 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.27.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.28.0'));
 
 forwardedPayload = null;
 assert.equal(
@@ -192,16 +202,66 @@ const unrelated = JSON.parse(forwardedPayload);
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 // Only the diagnostic label, carrying no title, no source and no stream of its own.
-assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f9n0s0w0|0|0||0.27.0']);
+assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.28.0']);
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
-// 9 top-level fields. It must never carry anything resembling a URL.
+// 10 top-level fields (including the current MODS `translate` collection). It must never
+// carry anything resembling a URL.
 const probe = Object.keys(forwarded.quality)
     .find((label) => label.startsWith('@VIBEMETA@'))
     .split('|')[2];
-assert.match(probe, /^c1p1v1f9n0s0w0$/);
+assert.match(probe, /^c1p1v1f10n0s0w0$/);
 
 // The bridge must report itself installed, otherwise it is silently doing nothing.
 assert.equal(context.window.VibePlayerBridge.installed, true);
+
+// Source components are where the current MODS payload keeps the other voices.  They are not
+// necessarily present in the top-level `voiceovers` array, so exercise the passive folder hooks
+// as well as the already-captured playback path.
+let sourceForwardedPayload;
+const sourceComponent = {
+    parse: (value) => value,
+    toPlayElement: (value) => value
+};
+const sourceContext = {
+    console: { info: () => {}, warn: () => {} },
+    window: {
+        location: { origin: 'http://lampa.mx' },
+        navigator: { userAgent: 'Lampa WebView Test', language: 'uk-UA' }
+    }
+};
+sourceContext.window.Lampa = {
+    Player: { play: () => 'played' },
+    Android: {
+        openPlayer: (_link, payload) => {
+            sourceForwardedPayload = payload;
+            return 'forwarded';
+        }
+    },
+    Activity: {
+        all: () => [{ activity: { component: sourceComponent } }],
+        active: () => ({ movie: { id: 'series-1' } })
+    }
+};
+sourceContext.Lampa = sourceContext.window.Lampa;
+vm.runInNewContext(pluginSource, sourceContext);
+
+sourceComponent.parse({
+    folder: {
+        'Dub Voice': { 1: [{ season: 1, episode: 1, title: 'First', stream: 'https://media.example/dub.m3u8', qualitys: { '1080p': 'https://media.example/dub-1080.m3u8' } }] },
+        Original: { 1: [{ season: 1, episode: 1, title: 'First', stream: 'https://media.example/original.m3u8', qualitys: { '1080p': 'https://media.example/original-1080.m3u8' } }] }
+    }
+});
+sourceContext.Lampa.Player.play({ url: 'https://media.example/dub.m3u8', season: 1, episode: 1, playlist: [] });
+sourceContext.Lampa.Android.openPlayer(
+    'https://media.example/dub.m3u8',
+    JSON.stringify({ url: 'https://media.example/dub.m3u8', season: 1, episode: 1 })
+);
+const sourceOutput = JSON.parse(sourceForwardedPayload);
+const sourceLabels = Object.keys(sourceOutput.quality);
+assert(sourceLabels.some((label) => label.startsWith('@VIBEVOICE@Dub%20Voice|1080p')));
+assert(sourceLabels.some((label) => label.startsWith('@VIBEVOICE@Original|1080p')));
+assert(sourceLabels.some((label) => label.startsWith('@VIBEEPISODE@1|1|0|0|First|1080p|Dub%20Voice')));
+assert(sourceLabels.some((label) => label.startsWith('@VIBEEPISODE@1|1|0|0|First|1080p|Original')));
 
 console.log('plugin bridge tests passed');
