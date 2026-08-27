@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.31.0';
+    var BRIDGE_VERSION = '0.32.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -793,16 +793,16 @@
         onlineComponents().forEach(function (component) {
             if (loggedSourceComponents && !loggedSourceComponents.has(component)) {
                 loggedSourceComponents.add(component);
-                var own = Object.keys(component).filter(function (key) {
-                    return typeof component[key] === 'function';
-                });
+                var allOwn = Object.keys(component);
+                var own = allOwn.filter(function (key) { return typeof component[key] === 'function'; });
                 var proto = Object.getPrototypeOf(component);
                 var inherited = proto ? Object.getOwnPropertyNames(proto).filter(function (key) {
                     return key !== 'constructor' && typeof component[key] === 'function';
                 }) : [];
                 console.info(
                     '[VibePlayer] source component methods own=' + own.slice(0, 32).join(',') +
-                    ' inherited=' + inherited.slice(0, 32).join(',')
+                    ' inherited=' + inherited.slice(0, 32).join(',') +
+                    ' data=' + allOwn.filter(function (key) { return typeof component[key] !== 'function'; }).slice(0, 24).join(',')
                 );
             }
             wrapComponentMethod(component, 'parse', rememberFolder);
@@ -818,6 +818,21 @@
                         ? 'array:' + value.length
                         : Object.keys(value).slice(0, 24).join(',');
                     console.info('[VibePlayer] build arg' + index + '=' + keys);
+                });
+            });
+            [
+                'startSource', 'lifeSource', 'createSource', 'create', 'request',
+                'setFlowsForQuality', 'setFlowsForItem', 'getExternalPlayUrl',
+                'normalizeExternalPlayFile', 'getFileUrl', 'applyPlayerDisplayTitle'
+            ].forEach(function (name) {
+                wrapComponentMethod(component, name, function () {
+                    Array.prototype.slice.call(arguments).forEach(function (value, index) {
+                        if (!value || typeof value !== 'object') return;
+                        rememberFolder(value);
+                        if (itemHasPlayableAddress(value)) rememberItem(value);
+                        var keys = Array.isArray(value) ? 'array:' + value.length : Object.keys(value).slice(0, 24).join(',');
+                        console.info('[VibePlayer] ' + name + ' arg' + index + '=' + keys);
+                    });
                 });
             });
         });
