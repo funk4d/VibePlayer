@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.32.0';
+    var BRIDGE_VERSION = '0.33.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -357,9 +357,9 @@
         return true;
     }
 
-    function voiceoverName(item, index) {
+    function voiceoverName(item, index, fallback) {
         if (!item || typeof item !== 'object') return 'Voiceover ' + (index + 1);
-        return itemVoiceName(item) ||
+        return itemVoiceName(item, fallback) ||
             plainText(item.label) ||
             plainText(item.title) ||
             plainText(item.name) ||
@@ -579,23 +579,49 @@
         return candidates.length;
     }
 
-    function appendArrayValues(target, value) {
-        if (Array.isArray(value)) {
-            value.forEach(function (item) { target.push(item); });
+    function voiceoverContainerKey(key) {
+        return /^(folder|data|result|items?|playlist|qualitys?|qualities|streams?|sources?|files?|episodes?|seasons?|voiceovers?|voices|translate|translations?|dubs?|flow|flows)$/i.test(key) ||
+            /^\d+$/.test(key);
+    }
+
+    /**
+     * MODS has shipped voice choices as arrays, but the newer component keeps them in maps
+     * such as translate["ColdFilm"] or flows["Original"].  Flatten only those already-loaded
+     * objects.  No network call is made here; a playable object is just remembered for the
+     * same Intent serialisation used by the older payload shape.
+     */
+    function appendArrayValues(target, value, fallback, depth, seen) {
+        depth = depth || 0;
+        if (!value || typeof value !== 'object' || depth > 6) return;
+        if (!seen) seen = [];
+        if (seen.indexOf(value) !== -1) return;
+        seen.push(value);
+
+        if (itemHasPlayableAddress(value)) {
+            target.push({ item: value, fallback: fallback });
             return;
         }
-        if (!value || typeof value !== 'object') return;
-        // `translate` in the current MODS payload is a container, while older payloads
-        // exposed the same entries as `voiceovers`.  Track/subtitle arrays are metadata,
-        // not source voice choices, so deliberately leave those branches alone.
-        ['voiceovers', 'voices', 'translations', 'dubs', 'items'].forEach(function (key) {
-            if (Array.isArray(value[key])) value[key].forEach(function (item) { target.push(item); });
+        if (Array.isArray(value)) {
+            value.forEach(function (item) {
+                appendArrayValues(target, item, fallback, depth + 1, seen);
+            });
+            return;
+        }
+
+        Object.keys(value).forEach(function (key) {
+            var child = value[key];
+            if (!child || typeof child !== 'object') return;
+            var nextFallback = fallback;
+            // Unknown keys directly below a recognised container are voice names.  Keep an
+            // existing explicit/folder voice ahead of a generic map key.
+            if (!voiceoverContainerKey(key)) nextFallback = fallback || plainText(key);
+            appendArrayValues(target, child, nextFallback, depth + 1, seen);
         });
     }
 
-    function addVoiceoverItem(target, item, index) {
+    function addVoiceoverItem(target, item, index, fallback) {
         if (!item || typeof item !== 'object') return 0;
-        var name = voiceoverName(item, index);
+        var name = voiceoverName(item, index, fallback);
         var variants = item.quality || item.qualitys || item.qualities ||
             item.files || item.streams || item.sources;
         var added = 0;
@@ -634,8 +660,8 @@
         });
         var serialized = 0;
 
-        voiceovers.forEach(function (item, index) {
-            serialized += addVoiceoverItem(qualities, item, index);
+        voiceovers.forEach(function (entry, index) {
+            serialized += addVoiceoverItem(qualities, entry.item, index, entry.fallback);
         });
 
         // A series source normally keeps the alternatives in folder[voice][season] rather
@@ -650,7 +676,7 @@
                 if (!name || integer(item && item.episode, -1) !== currentEpisode) return;
                 if (currentSeason >= 0 && integer(item && item.season, -1) !== currentSeason) return;
                 sourceVoiceovers += 1;
-                serialized += addVoiceoverItem(qualities, item, sourceVoiceovers);
+                serialized += addVoiceoverItem(qualities, item, sourceVoiceovers, name);
             });
         }
 
@@ -686,7 +712,6 @@
     // Keep that context out of the source's own objects: mutating them changes what Lampa's
     // built-in player sees and makes a diagnostic bridge an accidental source plugin.
     var sourceItemVoices = typeof WeakMap === 'function' ? new WeakMap() : null;
-    var loggedSourceComponents = typeof WeakSet === 'function' ? new WeakSet() : null;
 
     var hookHits = {};
 
@@ -730,10 +755,54 @@
         if (!explicitVoiceName(item)) sourceItemVoices.set(item, voice);
     }
 
-    function rememberItem(item) {
+    function rememberItem(item, fallback) {
         if (!item || typeof item !== 'object' || !itemHasPlayableAddress(item)) return;
+        rememberSourceVoice(item, fallback);
         if (sourceItems.length >= MAX_SOURCE_ITEMS) return;
         if (sourceItems.indexOf(item) === -1) sourceItems.push(item);
+    }
+
+    /**
+     * Observe values a source component has already produced.  The newer MODS component no
+     * longer exposes parse()/toPlayElement(); it keeps the resolved entries in return values,
+     * flow maps and component data instead.  This collector is deliberately bounded and
+     * read-only: it never invokes a function, follows a promise or performs a request.
+     */
+    function collectSourceValue(value, depth, fallback, seen) {
+        depth = depth || 0;
+        if (!value || typeof value !== 'object' || depth > 6) return;
+        if (!seen) seen = typeof WeakSet === 'function' ? new WeakSet() : [];
+
+        if (typeof seen.has === 'function') {
+            if (seen.has(value)) return;
+            seen.add(value);
+        } else {
+            if (seen.indexOf(value) !== -1) return;
+            seen.push(value);
+        }
+
+        rememberFolder(value);
+        if (itemHasPlayableAddress(value)) {
+            rememberItem(value, fallback);
+            return;
+        }
+
+        if (Array.isArray(value)) {
+            value.forEach(function (entry) {
+                collectSourceValue(entry, depth + 1, fallback, seen);
+            });
+            return;
+        }
+
+        Object.keys(value).slice(0, 80).forEach(function (key) {
+            var child = value[key];
+            if (!child || typeof child !== 'object') return;
+            var nextFallback = fallback;
+            // Unknown keys below a known source container are normally voice names
+            // (translate["Dub"], flows["Original"], folder["ColdFilm"], ...).
+            if (!voiceoverContainerKey(key)) nextFallback = fallback || plainText(key);
+            collectSourceValue(child, depth + 1, nextFallback, seen);
+        });
     }
 
     function wrapComponentMethod(component, name, observer) {
@@ -754,6 +823,23 @@
         return true;
     }
 
+    function wrapComponentMethodAfter(component, name, observer) {
+        var current = component[name];
+        if (typeof current !== 'function') return false;
+        if (current.__vibeWrapped === BRIDGE_VERSION) return false;
+        var original = current.__vibeOriginal || current;
+        var wrapped = function () {
+            var result = original.apply(this, arguments);
+            hookHits[name] = (hookHits[name] || 0) + 1;
+            try { observer(result, arguments); } catch (error) { /* observation only */ }
+            return result;
+        };
+        wrapped.__vibeWrapped = BRIDGE_VERSION;
+        wrapped.__vibeOriginal = original;
+        component[name] = wrapped;
+        return true;
+    }
+
     function rememberFolder(value) {
         // parse() is where the component turns a balancer answer into its own structure:
         // { voice: [...], season: [...], folder: { voice: { season: [ episodes ] } } }.
@@ -762,13 +848,6 @@
         var folder = value && typeof value === 'object'
             ? value.folder || (value.data && value.data.folder) || (value.result && value.result.folder)
             : null;
-        if (value && typeof value === 'object') {
-            var topKeys = Object.keys(value).slice(0, 24).join(',');
-            var folderKeys = folder && typeof folder === 'object'
-                ? Object.keys(folder).slice(0, 24).join(',')
-                : 'none';
-            console.info('[VibePlayer] source shape top=' + topKeys + ' folder=' + folderKeys);
-        }
         if (!folder || typeof folder !== 'object') return;
 
         // Answers arrive in parts - one season, one voice - and the component is rebuilt
@@ -791,47 +870,32 @@
 
     function hookSourceComponent() {
         onlineComponents().forEach(function (component) {
-            if (loggedSourceComponents && !loggedSourceComponents.has(component)) {
-                loggedSourceComponents.add(component);
-                var allOwn = Object.keys(component);
-                var own = allOwn.filter(function (key) { return typeof component[key] === 'function'; });
-                var proto = Object.getPrototypeOf(component);
-                var inherited = proto ? Object.getOwnPropertyNames(proto).filter(function (key) {
-                    return key !== 'constructor' && typeof component[key] === 'function';
-                }) : [];
-                console.info(
-                    '[VibePlayer] source component methods own=' + own.slice(0, 32).join(',') +
-                    ' inherited=' + inherited.slice(0, 32).join(',') +
-                    ' data=' + allOwn.filter(function (key) { return typeof component[key] !== 'function'; }).slice(0, 24).join(',')
-                );
-            }
+            // Some versions keep the resolved catalogue on the component instead of passing
+            // it through parse(). Read only the known data slots; never invoke component code.
+            [
+                'data', 'folder', 'result', 'items', 'playlist', 'sources', 'flows', 'flow',
+                'voiceovers', 'voices', 'translate', 'translations', 'dubs', 'qualities'
+            ].forEach(function (key) {
+                if (component[key] && typeof component[key] === 'object') {
+                    collectSourceValue(component[key], 0, null);
+                }
+            });
+
             wrapComponentMethod(component, 'parse', rememberFolder);
             wrapComponentMethod(component, 'toPlayElement', rememberItem);
-            wrapComponentMethod(component, 'build', function () {
-                Array.prototype.slice.call(arguments).forEach(function (value, index) {
-                    if (!value || typeof value !== 'object') {
-                        console.info('[VibePlayer] build arg' + index + '=' + typeof value);
-                        return;
-                    }
-                    rememberFolder(value);
-                    var keys = Array.isArray(value)
-                        ? 'array:' + value.length
-                        : Object.keys(value).slice(0, 24).join(',');
-                    console.info('[VibePlayer] build arg' + index + '=' + keys);
-                });
-            });
+
+            // The current MODS methods resolve or reshape source entries synchronously. Observe
+            // both arguments and return values after the original method has run, so mutated
+            // flow objects are captured without changing the method's behaviour.
             [
-                'startSource', 'lifeSource', 'createSource', 'create', 'request',
+                'build', 'startSource', 'lifeSource', 'createSource', 'create', 'request',
                 'setFlowsForQuality', 'setFlowsForItem', 'getExternalPlayUrl',
                 'normalizeExternalPlayFile', 'getFileUrl', 'applyPlayerDisplayTitle'
             ].forEach(function (name) {
-                wrapComponentMethod(component, name, function () {
-                    Array.prototype.slice.call(arguments).forEach(function (value, index) {
-                        if (!value || typeof value !== 'object') return;
-                        rememberFolder(value);
-                        if (itemHasPlayableAddress(value)) rememberItem(value);
-                        var keys = Array.isArray(value) ? 'array:' + value.length : Object.keys(value).slice(0, 24).join(',');
-                        console.info('[VibePlayer] ' + name + ' arg' + index + '=' + keys);
+                wrapComponentMethodAfter(component, name, function (result, args) {
+                    collectSourceValue(result, 0, null);
+                    Array.prototype.slice.call(args).forEach(function (value) {
+                        collectSourceValue(value, 0, null);
                     });
                 });
             });
