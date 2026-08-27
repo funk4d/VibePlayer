@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.29.0';
+    var BRIDGE_VERSION = '0.30.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -686,6 +686,7 @@
     // Keep that context out of the source's own objects: mutating them changes what Lampa's
     // built-in player sees and makes a diagnostic bridge an accidental source plugin.
     var sourceItemVoices = typeof WeakMap === 'function' ? new WeakMap() : null;
+    var loggedSourceComponents = typeof WeakSet === 'function' ? new WeakSet() : null;
 
     var hookHits = {};
 
@@ -790,6 +791,20 @@
 
     function hookSourceComponent() {
         onlineComponents().forEach(function (component) {
+            if (loggedSourceComponents && !loggedSourceComponents.has(component)) {
+                loggedSourceComponents.add(component);
+                var own = Object.keys(component).filter(function (key) {
+                    return typeof component[key] === 'function';
+                });
+                var proto = Object.getPrototypeOf(component);
+                var inherited = proto ? Object.getOwnPropertyNames(proto).filter(function (key) {
+                    return key !== 'constructor' && typeof component[key] === 'function';
+                }) : [];
+                console.info(
+                    '[VibePlayer] source component methods own=' + own.slice(0, 32).join(',') +
+                    ' inherited=' + inherited.slice(0, 32).join(',')
+                );
+            }
             wrapComponentMethod(component, 'parse', rememberFolder);
             wrapComponentMethod(component, 'toPlayElement', rememberItem);
         });
