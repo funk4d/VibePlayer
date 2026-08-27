@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.28.0';
+    var BRIDGE_VERSION = '0.29.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -761,6 +761,13 @@
         var folder = value && typeof value === 'object'
             ? value.folder || (value.data && value.data.folder) || (value.result && value.result.folder)
             : null;
+        if (value && typeof value === 'object') {
+            var topKeys = Object.keys(value).slice(0, 24).join(',');
+            var folderKeys = folder && typeof folder === 'object'
+                ? Object.keys(folder).slice(0, 24).join(',')
+                : 'none';
+            console.info('[VibePlayer] source shape top=' + topKeys + ' folder=' + folderKeys);
+        }
         if (!folder || typeof folder !== 'object') return;
 
         // Answers arrive in parts - one season, one voice - and the component is rebuilt
