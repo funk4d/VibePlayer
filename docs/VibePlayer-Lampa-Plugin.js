@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.33.0';
+    var BRIDGE_VERSION = '0.34.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -805,6 +805,24 @@
         });
     }
 
+    // A few source versions keep the episode as a call-style object (`url` is an API method)
+    // and return its media address as a string from getFileUrl/getExternalPlayUrl.  Preserve
+    // that already-resolved result on a shallow copy, without mutating MODS's own item.
+    function rememberResolvedResult(method, result, args) {
+        if (!/^(getExternalPlayUrl|normalizeExternalPlayFile|getFileUrl|fetchFileUrl)$/.test(method)) return;
+        var resolved = nonEmptyString(result);
+        if (!resolved || !/^https?:\/\//i.test(resolved)) return;
+
+        Array.prototype.slice.call(args).forEach(function (value) {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+            var hasEpisode = episodeNumber(value) || value.season != null || value.episode != null;
+            if (!hasEpisode && !explicitVoiceName(value) && !itemQualities(value).length) return;
+            var copy = Object.assign({}, value);
+            copy.stream = resolved;
+            rememberItem(copy, itemVoiceName(value));
+        });
+    }
+
     function wrapComponentMethod(component, name, observer) {
         var current = component[name];
         if (typeof current !== 'function') return false;
@@ -897,6 +915,7 @@
                     Array.prototype.slice.call(args).forEach(function (value) {
                         collectSourceValue(value, 0, null);
                     });
+                    rememberResolvedResult(name, result, args);
                 });
             });
         });
