@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.30.0';
+    var BRIDGE_VERSION = '0.31.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -807,6 +807,19 @@
             }
             wrapComponentMethod(component, 'parse', rememberFolder);
             wrapComponentMethod(component, 'toPlayElement', rememberItem);
+            wrapComponentMethod(component, 'build', function () {
+                Array.prototype.slice.call(arguments).forEach(function (value, index) {
+                    if (!value || typeof value !== 'object') {
+                        console.info('[VibePlayer] build arg' + index + '=' + typeof value);
+                        return;
+                    }
+                    rememberFolder(value);
+                    var keys = Array.isArray(value)
+                        ? 'array:' + value.length
+                        : Object.keys(value).slice(0, 24).join(',');
+                    console.info('[VibePlayer] build arg' + index + '=' + keys);
+                });
+            });
         });
     }
 
