@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.36.0';
+    var BRIDGE_VERSION = '0.37.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -207,6 +207,67 @@
         return typeof originalPayload === 'string' ? JSON.stringify(data) : data;
     }
 
+    // Android's Binder rejects an Activity launch when the marshalled Intent is close to
+    // 1 MB. A MODS/Alloha series can contain hundreds of full playlist objects, and passing
+    // those objects through openPlayer makes the launch fail before VibePlayer receives it.
+    // The player needs the current item, its compact quality map, and the transport labels;
+    // all other episode data has already been encoded into @VIBEEPISODE@ labels below.
+    function compactPlaylistItem(item) {
+        if (!item || typeof item !== 'object') return null;
+        var compact = {};
+        [
+            'season', 'episode', 'title', 'voice_name', 'voice', 'voiceover',
+            'translation', 'dubbing', 'quality_label', 'stream', 'src', 'file',
+            'link', 'path', 'url', 'timeline', 'quality'
+        ].forEach(function (name) {
+            if (item[name] != null) compact[name] = item[name];
+        });
+        return Object.keys(compact).length ? compact : null;
+    }
+
+    function currentPlaylistItem(data, link) {
+        var playlist = Array.isArray(data.playlist) ? data.playlist : [];
+        var expectedUrl = streamUrl(link) || streamUrl(data);
+        for (var index = 0; index < playlist.length; index += 1) {
+            if (ownsStreamUrl(playlist[index], expectedUrl)) return playlist[index];
+        }
+
+        var season = integer(data.season, -1);
+        var episode = integer(data.episode, -1);
+        for (var i = 0; i < playlist.length; i += 1) {
+            var item = playlist[i];
+            if (item && integer(item.season, -2) === season && integer(item.episode, -2) === episode) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    function compactForwardPayload(data, link) {
+        var compact = {};
+        [
+            'url', 'title', 'movie_title', 'source_name', 'provider_name',
+            'balancer_name', 'source', 'provider', 'balancer', 'online',
+            'season', 'episode', 'voice_name', 'position'
+        ].forEach(function (name) {
+            if (data[name] != null && typeof data[name] !== 'object') compact[name] = data[name];
+        });
+
+        if (data.headers && typeof data.headers === 'object' && !Array.isArray(data.headers)) {
+            compact.headers = data.headers;
+        }
+        if (data.quality && typeof data.quality === 'object' && !Array.isArray(data.quality)) {
+            compact.quality = data.quality;
+        }
+        ['url_reserve', 'quality_reserve', 'timeline'].forEach(function (name) {
+            if (data[name] != null) compact[name] = data[name];
+        });
+
+        var current = compactPlaylistItem(currentPlaylistItem(data, link));
+        if (current) compact.playlist = [current];
+        return compact;
+    }
+
     /**
      * Mirror our labels onto the playlist entry being launched.
      *
@@ -219,21 +280,7 @@
         var qualities = data.quality;
         if (!playlist || !qualities || typeof qualities !== 'object') return 0;
 
-        var expectedUrl = streamUrl(link) || streamUrl(data);
-        var current = null;
-        for (var index = 0; index < playlist.length && !current; index += 1) {
-            if (ownsStreamUrl(playlist[index], expectedUrl)) current = playlist[index];
-        }
-        if (!current) {
-            var season = integer(data.season, -1);
-            var episode = integer(data.episode, -1);
-            for (var i = 0; i < playlist.length && !current; i += 1) {
-                var entry = playlist[i];
-                if (entry && integer(entry.season, -2) === season && integer(entry.episode, -2) === episode) {
-                    current = entry;
-                }
-            }
-        }
+        var current = currentPlaylistItem(data, link);
         if (!current) return 0;
 
         var merged = Object.assign({}, current.quality || {});
@@ -459,6 +506,9 @@
         var seen = {};
         var seenEpisodes = {};
         var serialized = 0;
+        var currentSeason = integer(data && data.season, -1);
+        var currentEpisode = integer(data && data.episode, -1);
+        var currentVoice = itemVoiceName(data) || plainText(data && data.voice_name) || '';
 
         // The object can be handed to openPlayer more than once, and an older bridge may
         // already have left episode labels in it.  Keep the source's real qualities, but
@@ -475,7 +525,15 @@
             var base = voice + '|' + integer(item.season, 0) + 'x' + number;
             seenEpisodes[base] = true;
 
-            itemQualities(item).forEach(function (entry) {
+            // Only the episode currently being launched needs every quality. For all other
+            // episodes one direct address is enough; selecting one later asks the source's
+            // advertised resolve endpoint for its remaining qualities. Keeping every quality
+            // for every episode is what turns a normal series into an 800-KB Intent.
+            var isCurrent = number === currentEpisode &&
+                (currentSeason < 0 || integer(item.season, -1) === currentSeason) &&
+                (!currentVoice || !voice || voice === currentVoice);
+            var variants = isCurrent ? itemQualities(item) : itemQualities(item).slice(0, 1);
+            variants.forEach(function (entry) {
                 var key = base + '|' + entry.label;
                 if (seen[key]) return;
                 seen[key] = true;
@@ -494,11 +552,15 @@
             seenEpisodes[base] = true;
             var variants = item.quality;
             if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
-                Object.keys(variants).forEach(function (quality) {
+                var labels = Object.keys(variants).filter(function (quality) {
                     if (isBridgeLabel(quality)) return;
-                    var url = streamUrl(variants[quality]);
-                    if (!url) return;
-                    qualities[episodeLabel(item, quality)] = url;
+                    return Boolean(streamUrl(variants[quality]));
+                });
+                var isCurrent = number === currentEpisode &&
+                    (currentSeason < 0 || integer(item.season, -1) === currentSeason) &&
+                    (!currentVoice || !voice || voice === currentVoice);
+                (isCurrent ? labels : labels.slice(0, 1)).forEach(function (quality) {
+                    qualities[episodeLabel(item, quality)] = streamUrl(variants[quality]);
                     serialized += 1;
                 });
             } else {
@@ -1142,7 +1204,14 @@
             }
             window.VibePlayerBridge.lastStats = stats;
             window.VibePlayerBridge.lastSource = sourceSummary();
-            return original.call(this, link, data ? encodePayload(payload, data) : payload);
+            // Never forward the full captured playlist/voiceover graph through Binder. It can
+            // exceed Android's transaction limit before the external player process is even
+            // created. The compact payload retains the current item and all transport labels.
+            var forwarded = data ? compactForwardPayload(data, link) : data;
+            if (forwarded) {
+                console.info('[VibePlayer] forwarded payload bytes=' + JSON.stringify(forwarded).length);
+            }
+            return original.call(this, link, data ? encodePayload(payload, forwarded) : payload);
         };
         wrapped.__vibeOriginal = original;
         Lampa.Android.openPlayer = wrapped;
