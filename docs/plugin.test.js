@@ -17,7 +17,8 @@ const context = {
     },
     window: {
         location: { origin: 'http://lampa.mx' },
-        navigator: { userAgent: 'Lampa WebView Test', language: 'uk-UA' }
+        navigator: { userAgent: 'Lampa WebView Test', language: 'uk-UA' },
+        JSON: { stringify: JSON.stringify, parse: JSON.parse }
     }
 };
 context.window.Lampa = {
@@ -164,7 +165,8 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.40.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.41.0');
+
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
 assert.deepEqual(Array.from(context.window.VibePlayerBridge.lastCapture.headerNames), ['Cookie', 'X-Source-Header']);
@@ -173,7 +175,30 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.40.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.41.0'));
+
+// A direct source call may never touch Lampa.Player.play. The JSON hook still has to compact
+// the object at the moment MODS serializes it for AndroidJS.
+const directJsonPayload = {
+    url: 'https://media.example/json.m3u8',
+    quality: Object.assign(
+        { '1080p': 'https://media.example/json.m3u8' },
+        Object.fromEntries(Array.from({ length: 500 }, (_, index) => [
+            'raw-' + index,
+            'https://media.example/json/' + index + '-' + 'x'.repeat(1800) + '.m3u8'
+        ])),
+    ),
+    playlist: [{
+        season: 1,
+        episode: 1,
+        url: 'https://media.example/json.m3u8',
+        quality: { '1080p': 'https://media.example/json.m3u8' }
+    }]
+};
+const compactJson = context.window.JSON.parse(context.window.JSON.stringify(directJsonPayload));
+assert(compactJson.playlist && compactJson.playlist.length === 1);
+assert(compactJson.quality['raw-0'] === undefined);
+assert(JSON.stringify(compactJson).length < 700000);
 
 forwardedPayload = null;
 assert.equal(
@@ -264,7 +289,7 @@ const unrelated = JSON.parse(forwardedPayload);
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 // Only the diagnostic label, carrying no title, no source and no stream of its own.
-assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.40.0']);
+assert.deepEqual(Object.keys(unrelated.quality), ['@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.41.0']);
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
 // 10 top-level fields (including the current MODS `translate` collection). It must never

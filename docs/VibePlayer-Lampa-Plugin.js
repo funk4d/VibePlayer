@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.40.0';
+    var BRIDGE_VERSION = '0.41.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -475,6 +475,46 @@
         } catch (error) {
             // Frozen source objects are still handled by the AndroidJS/Lampa hooks.
         }
+    }
+
+    var jsonStringifyOriginal = null;
+    var jsonStringifyCompacting = false;
+
+    function looksLikePlaybackPayload(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) &&
+            (Array.isArray(value.playlist) ||
+                (value.quality && typeof value.quality === 'object' && !Array.isArray(value.quality))) &&
+            Boolean(streamUrl(value) || value.url);
+    }
+
+    // A source is allowed to call JSON.stringify itself, without touching Lampa.Android or
+    // Lampa.Player first.  Intercept only objects that unmistakably look like playback data;
+    // all other application JSON continues through the native implementation unchanged.
+    function hookJsonStringify() {
+        if (!window.JSON || typeof window.JSON.stringify !== 'function') return false;
+        if (window.JSON.stringify.__vibeWrapped === BRIDGE_VERSION) return true;
+        var original = window.JSON.stringify.__vibeOriginal || window.JSON.stringify;
+        var wrapped = function (value, replacer, space) {
+            if (jsonStringifyCompacting || !looksLikePlaybackPayload(value)) {
+                return original.call(this, value, replacer, space);
+            }
+            jsonStringifyCompacting = true;
+            try {
+                var link = streamUrl(value);
+                prepareForwardData(value, link);
+                return original.call(this, compactForwardPayload(value, link), replacer, space);
+            } finally {
+                jsonStringifyCompacting = false;
+            }
+        };
+        wrapped.__vibeOriginal = original;
+        wrapped.__vibeWrapped = BRIDGE_VERSION;
+        try {
+            window.JSON.stringify = wrapped;
+        } catch (error) {
+            return false;
+        }
+        return window.JSON.stringify === wrapped;
     }
 
     // Describes the whole card and stays true for every entry inside it.
@@ -1425,6 +1465,7 @@
         var Lampa = window.Lampa;
         if (!Lampa && !window.AndroidJS && !window.Android) return false;
 
+        hookJsonStringify();
         hookPlayerPlay(Lampa);
         var hooked = hookOpenPlayer(Lampa);
         if (Lampa) {
