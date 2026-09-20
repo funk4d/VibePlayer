@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.38.0';
+    var BRIDGE_VERSION = '0.39.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -1340,10 +1340,19 @@
         wrapped.__vibeOpenPlayerWrapped = BRIDGE_VERSION;
 
         try {
+            var boundMethods = {};
             var proxy = new Proxy(nativeAndroidJs, {
                 get: function (target, property, receiver) {
                     if (property === 'openPlayer') return wrapped;
-                    return Reflect.get(target, property, receiver);
+                    var value = Reflect.get(target, property, target);
+                    // Android's Java bridge validates the injected receiver.  Returning a
+                    // method bound to the original object keeps storageChange/httpReq/etc.
+                    // native while the facade remains transparent to Lampa's JavaScript.
+                    if (typeof value === 'function') {
+                        if (!boundMethods[property]) boundMethods[property] = value.bind(target);
+                        return boundMethods[property];
+                    }
+                    return value;
                 }
             });
             window.AndroidJS = proxy;
