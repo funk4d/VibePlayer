@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.37.0';
+    var BRIDGE_VERSION = '0.38.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -11,6 +11,10 @@
     var INSTALL_INTERVAL_MS = 500;
     // The online component is rebuilt per card, so its methods are re-wrapped as it appears.
     var COMPONENT_WATCH_MS = 1000;
+    // Lampa's native AndroidJS interface is the last hop before Binder.  Some source
+    // plugins call it directly, bypassing Lampa.Android.openPlayer, so both surfaces are
+    // watched and re-wrapped when Lampa rebuilds them.
+    var OPEN_PLAYER_WATCH_MS = 500;
     // A whole series across every voice can be hundreds of entries; the Intent is not a
     // place to discover a size limit the hard way.
     var MAX_SOURCE_ITEMS = 400;
@@ -18,6 +22,7 @@
     // large - it exists so that no extra request has to be made to learn what was watched.
     var PROGRESS_ENDPOINT = 'http://127.0.0.1:47615/progress';
     var PROGRESS_POLL_MS = 4000;
+    var MAX_FORWARD_QUALITY_ENTRIES = 96;
 
     if (window.VibePlayerBridge && window.VibePlayerBridge.version === BRIDGE_VERSION) return;
 
@@ -212,7 +217,66 @@
     // those objects through openPlayer makes the launch fail before VibePlayer receives it.
     // The player needs the current item, its compact quality map, and the transport labels;
     // all other episode data has already been encoded into @VIBEEPISODE@ labels below.
-    function compactPlaylistItem(item) {
+    function addQualityUrls(target, qualities) {
+        if (!qualities || typeof qualities !== 'object' || Array.isArray(qualities)) return;
+        if (Array.isArray(qualities)) {
+            qualities.forEach(function (entry) {
+                var url = streamUrl(entry);
+                if (url) target[url] = true;
+            });
+            return;
+        }
+        Object.keys(qualities).forEach(function (label) {
+            var url = streamUrl(qualities[label]);
+            if (url) target[url] = true;
+        });
+    }
+
+    /**
+     * Lampa's Android bridge only needs strings in the quality map.  Keeping the source's
+     * object values here is both unnecessary and dangerous: a single source can put every
+     * episode's signed URL graph in data.quality and push the Binder transaction back over
+     * its limit.  Retain all bridge transport labels, but retain ordinary qualities only
+     * when they belong to the episode currently being launched.
+     */
+    function compactQualityMap(qualities, data, link, currentItem) {
+        if (!qualities || typeof qualities !== 'object' || Array.isArray(qualities)) return null;
+
+        var currentUrls = {};
+        var expected = streamUrl(link) || streamUrl(data);
+        if (expected) currentUrls[expected] = true;
+
+        var current = currentItem || (data && currentPlaylistItem(data, link));
+        if (current) {
+            addQualityUrls(currentUrls, current.quality);
+            addQualityUrls(currentUrls, current.qualitys);
+            addQualityUrls(currentUrls, current.qualities);
+            itemQualities(current).forEach(function (entry) {
+                if (entry && entry.url) currentUrls[entry.url] = true;
+            });
+        }
+
+        var compact = {};
+        var ordinaryCount = 0;
+        Object.keys(qualities).forEach(function (label) {
+            var value = qualities[label];
+            var url = streamUrl(value);
+            if (!url) return;
+
+            if (isBridgeLabel(label)) {
+                compact[label] = url;
+                return;
+            }
+
+            if (currentUrls[url] && ordinaryCount < MAX_FORWARD_QUALITY_ENTRIES) {
+                compact[label] = url;
+                ordinaryCount += 1;
+            }
+        });
+        return compact;
+    }
+
+    function compactPlaylistItem(item, data, link) {
         if (!item || typeof item !== 'object') return null;
         var compact = {};
         [
@@ -222,6 +286,26 @@
         ].forEach(function (name) {
             if (item[name] != null) compact[name] = item[name];
         });
+
+        // Native Lampa requires `url` for every playlist item.  MODS has used `stream` and
+        // `src` for the same value, so normalise that one field instead of forwarding a
+        // malformed current item and forcing Lampa into its single-item fallback path.
+        if (!compact.url) {
+            var direct = streamUrl(item);
+            if (direct) compact.url = direct;
+        }
+
+        var rawQuality = item.quality || item.qualitys || item.qualities;
+        var quality = compactQualityMap(rawQuality, data || item, link, item);
+        if (!quality || !Object.keys(quality).length) {
+            quality = {};
+            itemQualities(item).forEach(function (entry) {
+                if (entry && entry.url && Object.keys(quality).length < MAX_FORWARD_QUALITY_ENTRIES) {
+                    quality[entry.label || 'Auto'] = entry.url;
+                }
+            });
+        }
+        if (Object.keys(quality).length) compact.quality = quality;
         return Object.keys(compact).length ? compact : null;
     }
 
@@ -257,13 +341,13 @@
             compact.headers = data.headers;
         }
         if (data.quality && typeof data.quality === 'object' && !Array.isArray(data.quality)) {
-            compact.quality = data.quality;
+            compact.quality = compactQualityMap(data.quality, data, link);
         }
-        ['url_reserve', 'quality_reserve', 'timeline'].forEach(function (name) {
+        ['url_reserve', 'timeline'].forEach(function (name) {
             if (data[name] != null) compact[name] = data[name];
         });
 
-        var current = compactPlaylistItem(currentPlaylistItem(data, link));
+        var current = compactPlaylistItem(currentPlaylistItem(data, link), data, link);
         if (current) compact.playlist = [current];
         return compact;
     }
@@ -283,6 +367,7 @@
         var current = currentPlaylistItem(data, link);
         if (!current) return 0;
 
+        var expectedUrl = streamUrl(link) || streamUrl(data);
         var merged = Object.assign({}, current.quality || {});
         Object.keys(merged).forEach(function (label) {
             if (isBridgeLabel(label)) delete merged[label];
@@ -1158,8 +1243,9 @@
     };
 
     function hookPlayerPlay(Lampa) {
-        var original = Lampa.Player && typeof Lampa.Player.play === 'function' &&
-            (Lampa.Player.play.__vibeOriginal || Lampa.Player.play);
+        if (!Lampa || !Lampa.Player || typeof Lampa.Player.play !== 'function') return false;
+        if (Lampa.Player.play.__vibeWrapped === BRIDGE_VERSION) return false;
+        var original = Lampa.Player.play.__vibeOriginal || Lampa.Player.play;
         if (!original) return;
 
         var wrapped = function (data) {
@@ -1174,61 +1260,156 @@
             return original.apply(this, arguments);
         };
         wrapped.__vibeOriginal = original;
+        wrapped.__vibeWrapped = BRIDGE_VERSION;
         Lampa.Player.play = wrapped;
+        return true;
+    }
+
+    function forwardOpenPlayer(original, receiver, link, payload) {
+        var data = decodePayload(payload);
+        var stats = {
+            metadata: 0,
+            captured: false,
+            headers: 0,
+            reserves: 0,
+            voiceovers: { total: 0, serialized: 0 },
+            episodes: { total: 0, serialized: 0 }
+        };
+        try {
+            if (data) {
+                stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
+                stats.headers = addPlaybackHeaders(data);
+                stats.reserves = serializeReserves(link, data);
+                stats.metadata = serializeMetadata(link, data, stats.captured);
+                stats.voiceovers = serializeVoiceovers(data);
+                stats.episodes = serializeEpisodes(data);
+                stats.mirrored = mirrorLabelsOntoCurrentItem(data, link);
+            }
+        } catch (error) {
+            console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
+        }
+        window.VibePlayerBridge.lastStats = stats;
+        window.VibePlayerBridge.lastSource = sourceSummary();
+        // Never forward the full captured playlist/voiceover graph through Binder. It can
+        // exceed Android's transaction limit before the external player process is even
+        // created. The compact payload retains the current item and all transport labels.
+        var forwarded = data ? compactForwardPayload(data, link) : data;
+        if (forwarded) {
+            console.info('[VibePlayer] forwarded payload bytes=' + JSON.stringify(forwarded).length);
+        }
+        return original.call(receiver, link, data ? encodePayload(payload, forwarded) : payload);
+    }
+
+    function wrapOpenPlayerTarget(holder, property) {
+        if (!holder || typeof holder[property] !== 'function') return false;
+        var current = holder[property];
+        if (current.__vibeOpenPlayerWrapped === BRIDGE_VERSION) return false;
+        var original = current.__vibeOriginal || current;
+        var wrapped = function (link, payload) {
+            return forwardOpenPlayer(original, this, link, payload);
+        };
+        wrapped.__vibeOriginal = original;
+        wrapped.__vibeOpenPlayerWrapped = BRIDGE_VERSION;
+        try {
+            holder[property] = wrapped;
+        } catch (error) {
+            return false;
+        }
+        return holder[property] === wrapped;
+    }
+
+    var androidJsProxyTarget = null;
+    var androidJsProxy = null;
+
+    // WebView normally lets an injected Java method be shadowed by assignment.  A few
+    // Android 9 WebView builds expose it as a read-only host object instead.  In that case
+    // install a transparent Proxy around the global object so direct `AndroidJS.openPlayer`
+    // calls still pass through the bridge.  The original object remains the receiver for
+    // every other native method.
+    function hookAndroidJsProxy() {
+        var nativeAndroidJs = window.AndroidJS;
+        if (!nativeAndroidJs || typeof nativeAndroidJs.openPlayer !== 'function') return false;
+        if (androidJsProxy && nativeAndroidJs === androidJsProxy) return true;
+        if (typeof Proxy !== 'function') return false;
+
+        var original = nativeAndroidJs.openPlayer.__vibeOriginal || nativeAndroidJs.openPlayer;
+        var wrapped = function (link, payload) {
+            return forwardOpenPlayer(original, nativeAndroidJs, link, payload);
+        };
+        wrapped.__vibeOriginal = original;
+        wrapped.__vibeOpenPlayerWrapped = BRIDGE_VERSION;
+
+        try {
+            var proxy = new Proxy(nativeAndroidJs, {
+                get: function (target, property, receiver) {
+                    if (property === 'openPlayer') return wrapped;
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+            window.AndroidJS = proxy;
+            androidJsProxyTarget = nativeAndroidJs;
+            androidJsProxy = proxy;
+            return window.AndroidJS === proxy;
+        } catch (error) {
+            return false;
+        }
     }
 
     function hookOpenPlayer(Lampa) {
-        var original = Lampa.Android.openPlayer.__vibeOriginal || Lampa.Android.openPlayer;
-        var wrapped = function (link, payload) {
-            var data = decodePayload(payload);
-            var stats = {
-                metadata: 0,
-                captured: false,
-                headers: 0,
-                reserves: 0,
-                voiceovers: { total: 0, serialized: 0 },
-                episodes: { total: 0, serialized: 0 }
-            };
-            try {
-                if (data) {
-                    stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
-                    stats.headers = addPlaybackHeaders(data);
-                    stats.reserves = serializeReserves(link, data);
-                    stats.metadata = serializeMetadata(link, data, stats.captured);
-                    stats.voiceovers = serializeVoiceovers(data);
-                    stats.episodes = serializeEpisodes(data);
-                    stats.mirrored = mirrorLabelsOntoCurrentItem(data, link);
-                }
-            } catch (error) {
-                console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
-            }
-            window.VibePlayerBridge.lastStats = stats;
-            window.VibePlayerBridge.lastSource = sourceSummary();
-            // Never forward the full captured playlist/voiceover graph through Binder. It can
-            // exceed Android's transaction limit before the external player process is even
-            // created. The compact payload retains the current item and all transport labels.
-            var forwarded = data ? compactForwardPayload(data, link) : data;
-            if (forwarded) {
-                console.info('[VibePlayer] forwarded payload bytes=' + JSON.stringify(forwarded).length);
-            }
-            return original.call(this, link, data ? encodePayload(payload, forwarded) : payload);
-        };
-        wrapped.__vibeOriginal = original;
-        Lampa.Android.openPlayer = wrapped;
+        var hooked = 0;
+        var targets = [
+            [window.AndroidJS, 'openPlayer'],
+            [window.Android, 'openPlayer'],
+            [Lampa && Lampa.AndroidJS, 'openPlayer'],
+            [Lampa && Lampa.Android, 'openPlayer']
+        ];
+        targets.forEach(function (target) {
+            if (wrapOpenPlayerTarget(target[0], target[1])) hooked += 1;
+        });
+        // If assignment to the injected object was rejected, the proxy is the fallback.
+        if (window.AndroidJS && window.AndroidJS !== androidJsProxyTarget &&
+            typeof window.AndroidJS.openPlayer === 'function' &&
+            window.AndroidJS.openPlayer.__vibeOpenPlayerWrapped !== BRIDGE_VERSION) {
+            if (hookAndroidJsProxy()) hooked += 1;
+        }
+        return hooked;
     }
+
+    var componentWatchStarted = false;
+    var openPlayerWatchStarted = false;
+    var progressWatchStarted = false;
+    var installLogged = false;
 
     function install() {
         var Lampa = window.Lampa;
-        if (!Lampa || !Lampa.Android || typeof Lampa.Android.openPlayer !== 'function') return false;
+        if (!Lampa && !window.AndroidJS && !window.Android) return false;
 
         hookPlayerPlay(Lampa);
-        hookOpenPlayer(Lampa);
-        hookSourceComponent();
-        if (typeof setInterval === 'function') setInterval(hookSourceComponent, COMPONENT_WATCH_MS);
-        watchForPlayerProgress();
-        window.VibePlayerBridge.installed = true;
-        console.info('[VibePlayer] bridge ' + BRIDGE_VERSION + ' installed');
-        return true;
+        var hooked = hookOpenPlayer(Lampa);
+        if (Lampa) {
+            hookSourceComponent();
+            if (!componentWatchStarted && typeof setInterval === 'function') {
+                componentWatchStarted = true;
+                setInterval(hookSourceComponent, COMPONENT_WATCH_MS);
+            }
+        }
+        if (!openPlayerWatchStarted && typeof setInterval === 'function') {
+            openPlayerWatchStarted = true;
+            setInterval(function () { hookOpenPlayer(window.Lampa); }, OPEN_PLAYER_WATCH_MS);
+        }
+        if (!progressWatchStarted) {
+            progressWatchStarted = true;
+            watchForPlayerProgress();
+        }
+        if (hooked || window.VibePlayerBridge.installed) {
+            window.VibePlayerBridge.installed = true;
+            if (!installLogged) {
+                installLogged = true;
+                console.info('[VibePlayer] bridge ' + BRIDGE_VERSION + ' installed');
+            }
+            return true;
+        }
+        return false;
     }
 
     // Plugins can run before Lampa has finished building its Android interface. Giving up at
