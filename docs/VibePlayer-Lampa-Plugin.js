@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.39.0';
+    var BRIDGE_VERSION = '0.40.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -422,6 +422,59 @@
             playlistCount: value && Array.isArray(value.playlist) ? value.playlist.length : 0,
             voiceoverCount: value && Array.isArray(value.voiceovers) ? value.voiceovers.length : 0
         };
+    }
+
+    function prepareForwardData(data, link) {
+        var stats = {
+            metadata: 0,
+            captured: false,
+            headers: 0,
+            reserves: 0,
+            voiceovers: { total: 0, serialized: 0 },
+            episodes: { total: 0, serialized: 0 }
+        };
+        try {
+            if (data) {
+                stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
+                stats.headers = addPlaybackHeaders(data);
+                stats.reserves = serializeReserves(link, data);
+                stats.metadata = serializeMetadata(link, data, stats.captured);
+                stats.voiceovers = serializeVoiceovers(data);
+                stats.episodes = serializeEpisodes(data);
+                stats.mirrored = mirrorLabelsOntoCurrentItem(data, link);
+            }
+        } catch (error) {
+            console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
+        }
+        window.VibePlayerBridge.lastStats = stats;
+        window.VibePlayerBridge.lastSource = sourceSummary();
+        return stats;
+    }
+
+    // Some MODS builds bypass both JavaScript hooks and construct the native JSON directly
+    // from the object handed to Lampa.Player.play.  JSON.stringify honours an object's
+    // non-enumerable toJSON method, so attach a lazy compact representation while leaving the
+    // source object itself intact for Lampa's own UI and episode bookkeeping.
+    function attachPayloadSerializer(data) {
+        if (!data || typeof data !== 'object' || data.__vibePayloadSerializer === BRIDGE_VERSION) return;
+        try {
+            Object.defineProperty(data, '__vibePayloadSerializer', {
+                value: BRIDGE_VERSION,
+                configurable: true,
+                enumerable: false
+            });
+            Object.defineProperty(data, 'toJSON', {
+                configurable: true,
+                enumerable: false,
+                value: function () {
+                    var link = streamUrl(this);
+                    prepareForwardData(this, link);
+                    return compactForwardPayload(this, link);
+                }
+            });
+        } catch (error) {
+            // Frozen source objects are still handled by the AndroidJS/Lampa hooks.
+        }
     }
 
     // Describes the whole card and stays true for every entry inside it.
@@ -1251,6 +1304,7 @@
         var wrapped = function (data) {
             if (data && typeof data === 'object') {
                 capturedPlayback = data;
+                attachPayloadSerializer(data);
                 window.VibePlayerBridge.lastCapture = captureSummary(data);
                 console.info(
                     '[VibePlayer] captured fields=' + window.VibePlayerBridge.lastCapture.fields.join(',') +
@@ -1267,29 +1321,7 @@
 
     function forwardOpenPlayer(original, receiver, link, payload) {
         var data = decodePayload(payload);
-        var stats = {
-            metadata: 0,
-            captured: false,
-            headers: 0,
-            reserves: 0,
-            voiceovers: { total: 0, serialized: 0 },
-            episodes: { total: 0, serialized: 0 }
-        };
-        try {
-            if (data) {
-                stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
-                stats.headers = addPlaybackHeaders(data);
-                stats.reserves = serializeReserves(link, data);
-                stats.metadata = serializeMetadata(link, data, stats.captured);
-                stats.voiceovers = serializeVoiceovers(data);
-                stats.episodes = serializeEpisodes(data);
-                stats.mirrored = mirrorLabelsOntoCurrentItem(data, link);
-            }
-        } catch (error) {
-            console.warn('[VibePlayer] serialization failed: ' + (error && error.name || 'Error'));
-        }
-        window.VibePlayerBridge.lastStats = stats;
-        window.VibePlayerBridge.lastSource = sourceSummary();
+        prepareForwardData(data, link);
         // Never forward the full captured playlist/voiceover graph through Binder. It can
         // exceed Android's transaction limit before the external player process is even
         // created. The compact payload retains the current item and all transport labels.
