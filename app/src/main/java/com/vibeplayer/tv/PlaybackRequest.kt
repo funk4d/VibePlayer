@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.MimeTypes
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
@@ -172,9 +173,10 @@ internal object QualityVariantParser {
     }
 
     fun fromIntent(intent: Intent): List<QualityVariant> {
+        val transportUrls = transportUrls(intent)
         return labeledValues(intent)
             .mapNotNull { (label, value) ->
-                val uri = uriFromValue(value) ?: return@mapNotNull null
+                val uri = uriFromValue(value, transportUrls) ?: return@mapNotNull null
                 val parsedLabel = parseLabel(label) ?: return@mapNotNull null
                 QualityVariant(
                     label = parsedLabel.quality,
@@ -194,23 +196,57 @@ internal object QualityVariantParser {
      * Backup addresses the source shipped next to the chosen one. They are never offered
      * in the quality menu — they only exist for [SourceLadder] to fall back to.
      */
-    fun reservesFromIntent(intent: Intent): List<String> = labeledValues(intent)
-        .mapNotNull { (label, value) ->
-            val order = parseReserveLabel(label) ?: return@mapNotNull null
-            val url = uriFromValue(value)?.toString() ?: return@mapNotNull null
-            order to url
-        }
-        .sortedBy { (order, _) -> order }
-        .map { (_, url) -> url }
-        .distinct()
+    fun reservesFromIntent(intent: Intent): List<String> {
+        val transportUrls = transportUrls(intent)
+        return labeledValues(intent)
+            .mapNotNull { (label, value) ->
+                val order = parseReserveLabel(label) ?: return@mapNotNull null
+                val url = uriFromValue(value, transportUrls)?.toString() ?: return@mapNotNull null
+                order to url
+            }
+            .sortedBy { (order, _) -> order }
+            .map { (_, url) -> url }
+            .distinct()
+    }
 
-    private fun uriFromValue(value: Any?): Uri? {
-        val raw = when (value) {
-            is Uri -> value.toString()
-            is String -> value
-            else -> return null
+    private fun rawValue(value: Any?): String? = when (value) {
+        is Uri -> value.toString()
+        is String -> value
+        else -> null
+    }
+
+    /** Reads the one compressed URL table carried by @VIBEBUNDLE@. */
+    private fun transportUrls(intent: Intent): List<String> {
+        val bundleValue = labeledValues(intent)
+            .firstOrNull { (label, _) -> label.startsWith(BUNDLE_PREFIX) }
+            ?.second
+        val raw = rawValue(bundleValue) ?: return emptyList()
+        val encoded = raw.removePrefix(TRANSPORT_BUNDLE_PREFIX)
+            .takeIf { raw.startsWith(TRANSPORT_BUNDLE_PREFIX) && it.isNotEmpty() }
+            ?: return emptyList()
+        val json = LzString.decompressFromEncodedURIComponent(encoded) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(json)
+            buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    array.optString(index).trim().takeIf { it.isNotEmpty() }?.let(::add)
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun uriFromValue(value: Any?, transportUrls: List<String> = emptyList()): Uri? {
+        val raw = rawValue(value) ?: return null
+        val resolved = when {
+            raw.startsWith(TRANSPORT_REF_PREFIX) -> {
+                val index = raw.removePrefix(TRANSPORT_REF_PREFIX).toIntOrNull()
+                    ?: return null
+                transportUrls.getOrNull(index) ?: return null
+            }
+            raw.startsWith(TRANSPORT_BUNDLE_PREFIX) -> return null
+            else -> raw
         }
-        val extracted = extractUrl(raw) ?: return null
+        val extracted = extractUrl(resolved) ?: return null
         return Uri.parse(extracted).takeIf {
             it.scheme?.lowercase() in setOf("http", "https", "content", "file")
         }
@@ -237,6 +273,7 @@ internal object QualityVariantParser {
         val trimmed = rawLabel.trim().takeIf(String::isNotEmpty) ?: return null
         if (trimmed.startsWith(METADATA_PREFIX)) return null
         if (trimmed.startsWith(RESERVE_PREFIX)) return null
+        if (trimmed.startsWith(BUNDLE_PREFIX)) return null
         if (trimmed.startsWith(EPISODE_PREFIX)) return parseEpisodeLabel(trimmed)
         if (!trimmed.startsWith(VOICEOVER_PREFIX)) return ParsedVariantLabel(trimmed)
 
@@ -282,14 +319,21 @@ internal object QualityVariantParser {
 
     private fun parseEpisodeLabel(rawLabel: String): ParsedVariantLabel {
         val parts = rawLabel.removePrefix(EPISODE_PREFIX).split('|', limit = 9)
-        if (parts.size < 6) return ParsedVariantLabel(rawLabel)
+        // Older bridge builds emitted a trailing separator without a quality name for the
+        // default episode stream.  It is still a perfectly usable episode; treating it as an
+        // ordinary quality makes the episode disappear and used to leave the activity with a
+        // malformed group.  Keep accepting the old shape and call it Auto.
+        if (parts.size < 5) return ParsedVariantLabel(rawLabel)
         return runCatching {
             val season = parts[0].toInt().coerceAtLeast(0)
             val episodeNumber = parts[1].toInt().coerceAtLeast(0)
             val percent = parts[2].toInt().coerceIn(0, 100)
             val positionMs = parts[3].toLong().coerceAtLeast(0L) * 1_000L
             val title = URLDecoder.decode(parts[4], StandardCharsets.UTF_8.name()).trim().ifEmpty { null }
-            val quality = URLDecoder.decode(parts[5], StandardCharsets.UTF_8.name()).trim()
+            val quality = parts.getOrNull(5)
+                ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
+                ?.ifEmpty { "Auto" }
+                ?: "Auto"
             require(episodeNumber > 0 && quality.isNotEmpty())
             val voice = parts.getOrNull(6)
                 ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
@@ -332,6 +376,9 @@ internal object QualityVariantParser {
     private const val EPISODE_PREFIX = "@VIBEEPISODE@"
     private const val METADATA_PREFIX = "@VIBEMETA@"
     private const val RESERVE_PREFIX = "@VIBERESERVE@"
+    private const val BUNDLE_PREFIX = "@VIBEBUNDLE@"
+    private const val TRANSPORT_REF_PREFIX = "vibe://ref/"
+    private const val TRANSPORT_BUNDLE_PREFIX = "vibe://bundle/"
 
     /** Structural counters only, so nothing from a stream URL can reach a log through here. */
     private val VERSION_FORMAT = Regex("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")

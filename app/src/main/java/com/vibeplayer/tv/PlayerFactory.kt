@@ -1,7 +1,6 @@
 package com.vibeplayer.tv
 
 import android.content.Context
-import android.net.ConnectivityManager
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -19,16 +18,64 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.dnsoverhttps.DnsOverHttps
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 @UnstableApi
 internal object PlayerFactory {
     data class Result(
         val player: ExoPlayer,
         val trackSelector: DefaultTrackSelector,
+        val networkResources: NetworkResources,
     )
+
+    /**
+     * Owns the OkHttp dispatcher and connection pool used by one ExoPlayer instance.
+     *
+     * ExoPlayer.release() stops its loaders, but it does not own the OkHttpClient that was
+     * supplied to OkHttpDataSource. If that client is left alive, synchronous and HTTP/2
+     * reader work can outlive the Activity. Repeated quality/episode switches then leave
+     * several clients competing for the television's small heap.
+     */
+    class NetworkResources internal constructor(
+        private val client: OkHttpClient,
+    ) : AutoCloseable {
+        @Volatile
+        private var closed = false
+
+        /** Cancel in-flight calls before the player itself is released. */
+        fun cancel() {
+            if (closed) return
+            client.dispatcher.cancelAll()
+        }
+
+        override fun close() {
+            if (closed) return
+            synchronized(this) {
+                if (closed) return
+                closed = true
+                client.dispatcher.cancelAll()
+            }
+            // OkHttp's pool/cache teardown can close sockets and touch the network. Android 9
+            // rejects that work on the Activity main thread (NetworkOnMainThreadException),
+            // which used to make pressing Back look like a player crash. Cancellation above is
+            // immediate; the blocking cleanup is deliberately off the UI thread.
+            thread(isDaemon = true, name = "vibe-http-close") {
+                runCatching { client.connectionPool.evictAll() }
+                    .onFailure { Log.w("VibePlayer", "HTTP pool cleanup failed", it) }
+                runCatching { client.cache?.close() }
+                    .onFailure { Log.w("VibePlayer", "HTTP cache cleanup failed", it) }
+                // newBuilder() shares the dispatcher, executor, and connection pool with the
+                // bootstrap DoH client, so shutting these down closes both clients owned by
+                // this playback session.
+                runCatching { client.dispatcher.executorService.shutdown() }
+                    .onFailure { Log.w("VibePlayer", "HTTP dispatcher cleanup failed", it) }
+            }
+        }
+    }
 
     fun create(
         context: Context,
@@ -81,19 +128,16 @@ internal object PlayerFactory {
                 ),
         )
 
-        val activeNetwork = context
-            .getSystemService(ConnectivityManager::class.java)
-            ?.activeNetwork
+        // Do not pin OkHttp to Network.getSocketFactory(). Android 9 can replace the
+        // underlying Wi-Fi/default network after a roam, DHCP renewal, or validation pass;
+        // the old factory then fails every new socket with ENONET ("network is not on the
+        // network") while the TV itself is already online again. The platform socket factory
+        // follows the current default network and is what the built-in player uses as well.
         val bootstrapClient = OkHttpClient.Builder()
             .connectTimeout(15_000, TimeUnit.MILLISECONDS)
             .readTimeout(30_000, TimeUnit.MILLISECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
-            .apply {
-                if (activeNetwork != null) {
-                    socketFactory(activeNetwork.socketFactory)
-                }
-            }
             .build()
         val dnsOverHttps = DnsOverHttps.Builder()
             .client(bootstrapClient)
@@ -114,6 +158,12 @@ internal object PlayerFactory {
         // it saw has no reason to recognise a client arriving somewhere else.
         val httpClient = bootstrapClient.newBuilder()
             .dns(SystemFirstDns(dnsOverHttps))
+            // The television has a small 192 MB application heap. On this firmware the
+            // OkHttp HTTP/2 reader can retain a large amount of media data while a progressive
+            // stream is being consumed; the crash is an OOM in Http2Stream$FramingSource.
+            // Media servers used by the player all support HTTP/1.1, which avoids that
+            // unbounded HTTP/2 buffering path while retaining redirects and headers.
+            .protocols(listOf(Protocol.HTTP_1_1))
             .eventListener(ConnectionLogger)
             .build()
 
@@ -131,22 +181,30 @@ internal object PlayerFactory {
 
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        val networkResources = NetworkResources(httpClient)
 
-        val player = ExoPlayer.Builder(context, renderersFactory)
-            .setTrackSelector(trackSelector)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setReleaseTimeoutMs(10_000L)
-            .build()
+        return try {
+            val player = ExoPlayer.Builder(context, renderersFactory)
+                .setTrackSelector(trackSelector)
+                .setMediaSourceFactory(mediaSourceFactory)
+                .setReleaseTimeoutMs(10_000L)
+                .build()
 
-        player.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                .build(),
-            true,
-        )
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                true,
+            )
 
-        return Result(player, trackSelector)
+            Result(player, trackSelector, networkResources)
+        } catch (error: Throwable) {
+            // A codec or renderer failure can happen before Result reaches the Activity. Do
+            // not leave the just-created OkHttp dispatcher alive in that failure path.
+            networkResources.close()
+            throw error
+        }
     }
 
     fun mediaItem(source: SourceCandidate): MediaItem {
@@ -192,7 +250,10 @@ internal object PlayerFactory {
             val address = inetSocketAddress.address ?: return
             val family = if (address is java.net.Inet6Address) "IPv6" else "IPv4"
             if (reported.add("$host/$family")) {
-                Log.i("VibePlayer", "Connected $host over $family (${address.hostAddress})")
+                // The address is deliberately omitted. It is useful to know which address
+                // family won, but logging the CDN IP is noise and can make a copied debug log
+                // look like a request target.
+                Log.i("VibePlayer", "Connected $host over $family")
             }
         }
     }

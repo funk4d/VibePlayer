@@ -64,6 +64,17 @@ class QualityVariantParserTest {
     }
 
     @Test
+    fun acceptsLegacyEpisodeLabelWithoutQuality() {
+        val parsed = QualityVariantParser.parseLabel(
+            "@VIBEEPISODE@1|1|0|29|Tractoring%20Series%201|",
+        )
+
+        assertEquals("Auto", parsed?.quality)
+        assertEquals(1, parsed?.episode?.season)
+        assertEquals(1, parsed?.episode?.episode)
+    }
+
+    @Test
     fun decodesMetadataBridgeLabel() {
         val parsed = QualityVariantParser.parseMetadataLabel(
             "@VIBEMETA@The%20Series|Alloha|c1p12v3f18",
@@ -84,4 +95,15 @@ class QualityVariantParserTest {
             QualityVariantParser.parseMetadataLabel("@VIBEMETA@x|y|https://media.example/leak.m3u8")?.probe,
         )
     }
+
+    @Test
+    fun decodesCompressedBridgeUrlBundle() {
+        val encoded = "NoIgFgLhAODOBcB6RYD2sKIMYFcBOeApgHYQB0AtgMw4AcIANOFHEiupqhGIXpTfQC6QA"
+
+        assertEquals(
+            "[\"https://host/current.m3u8\",\"https://host/other.m3u8\"]",
+            LzString.decompressFromEncodedURIComponent(encoded),
+        )
+    }
+
 }

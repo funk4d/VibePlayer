@@ -1,11 +1,12 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.41.0';
+    var BRIDGE_VERSION = '0.42.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
     var RESERVE_PREFIX = '@VIBERESERVE@';
+    var BUNDLE_PREFIX = '@VIBEBUNDLE@';
 
     var INSTALL_ATTEMPTS = 60;
     var INSTALL_INTERVAL_MS = 500;
@@ -24,10 +25,128 @@
     var PROGRESS_POLL_MS = 4000;
     var MAX_FORWARD_QUALITY_ENTRIES = 96;
 
+    // A series can contain hundreds of signed addresses. Sending each address as an
+    // individual Uri makes Android's Binder reject the launch even after the playlist has
+    // been reduced to one current item. Keep the labels (they are the player UI), but put
+    // the addresses into one LZ-string bundle and pass short vibe://ref/N values beside them.
+    // This is synchronous and self-contained: it never contacts a source or a proxy.
+    var TRANSPORT_REF_PREFIX = 'vibe://ref/';
+    var TRANSPORT_BUNDLE_PREFIX = 'vibe://bundle/';
+
     if (window.VibePlayerBridge && window.VibePlayerBridge.version === BRIDGE_VERSION) return;
 
     function nonEmptyString(value) {
         return typeof value === 'string' && value.trim() ? value.trim() : null;
+    }
+
+    // Small synchronous subset of lz-string 1.4.x. The URI-safe alphabet keeps the result
+    // valid inside an Android Uri extra without another escaping layer. The matching
+    // decompressor lives in the APK (QualityVariantParser), so this code is deliberately
+    // kept local instead of adding a runtime dependency to the Lampa page.
+    var LZ_URI_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-$';
+
+    function lzCompressUri(input) {
+        if (input == null) return '';
+        var dictionary = {};
+        var toCreate = {};
+        var w = '';
+        var enlargeIn = 2;
+        var dictSize = 3;
+        var numBits = 2;
+        var data = [];
+        var dataVal = 0;
+        var dataPosition = 0;
+        var i;
+        var value;
+
+        function writeBit(bit) {
+            dataVal = (dataVal << 1) | bit;
+            if (dataPosition === 5) {
+                dataPosition = 0;
+                data.push(LZ_URI_ALPHABET.charAt(dataVal));
+                dataVal = 0;
+            } else {
+                dataPosition += 1;
+            }
+        }
+
+        function writeBits(number, count) {
+            var current = number;
+            for (var bit = 0; bit < count; bit += 1) {
+                writeBit(current & 1);
+                current >>= 1;
+            }
+        }
+
+        function growDictionary() {
+            enlargeIn -= 1;
+            if (enlargeIn === 0) {
+                enlargeIn = Math.pow(2, numBits);
+                numBits += 1;
+            }
+        }
+
+        for (var index = 0; index < input.length; index += 1) {
+            var c = input.charAt(index);
+            if (!Object.prototype.hasOwnProperty.call(dictionary, c)) {
+                dictionary[c] = dictSize;
+                dictSize += 1;
+                toCreate[c] = true;
+            }
+
+            var wc = w + c;
+            if (Object.prototype.hasOwnProperty.call(dictionary, wc)) {
+                w = wc;
+                continue;
+            }
+
+            if (Object.prototype.hasOwnProperty.call(toCreate, w)) {
+                if (w.charCodeAt(0) < 256) {
+                    writeBits(0, numBits);
+                    writeBits(w.charCodeAt(0), 8);
+                } else {
+                    writeBits(1, numBits);
+                    writeBits(w.charCodeAt(0), 16);
+                }
+                growDictionary();
+                delete toCreate[w];
+            } else {
+                writeBits(dictionary[w], numBits);
+            }
+            growDictionary();
+            dictionary[wc] = dictSize;
+            dictSize += 1;
+            w = c;
+        }
+
+        if (w !== '') {
+            if (Object.prototype.hasOwnProperty.call(toCreate, w)) {
+                if (w.charCodeAt(0) < 256) {
+                    writeBits(0, numBits);
+                    writeBits(w.charCodeAt(0), 8);
+                } else {
+                    writeBits(1, numBits);
+                    writeBits(w.charCodeAt(0), 16);
+                }
+                growDictionary();
+                delete toCreate[w];
+            } else {
+                writeBits(dictionary[w], numBits);
+            }
+            growDictionary();
+        }
+
+        // End-of-stream marker and the zero padding required by lz-string.
+        writeBits(2, numBits);
+        while (true) {
+            dataVal <<= 1;
+            if (dataPosition === 5) {
+                data.push(LZ_URI_ALPHABET.charAt(dataVal));
+                break;
+            }
+            dataPosition += 1;
+        }
+        return data.join('');
     }
 
     /**
@@ -276,6 +395,58 @@
         return compact;
     }
 
+    function createTransportBundle() {
+        var urls = [];
+        var indexes = Object.create(null);
+        return {
+            urls: urls,
+            ref: function (url) {
+                if (!url) return null;
+                var index = indexes[url];
+                if (index == null) {
+                    index = urls.length;
+                    indexes[url] = index;
+                    urls.push(url);
+                }
+                return TRANSPORT_REF_PREFIX + index;
+            },
+            encoded: function () {
+                if (!urls.length) return null;
+                return TRANSPORT_BUNDLE_PREFIX + lzCompressUri(JSON.stringify(urls));
+            }
+        };
+    }
+
+    /**
+     * Replace every full address in one quality map with a short local reference. The one
+     * compressed bundle is put on the current playlist item, because that is the only map
+     * Lampa's generic configurePlayerIntent reads for an external player.
+     */
+    function packQualityMap(qualities, transport, includeBundle) {
+        if (!qualities || typeof qualities !== 'object' || Array.isArray(qualities)) return null;
+        var packed = {};
+        Object.keys(qualities).forEach(function (label) {
+            if (label.indexOf(BUNDLE_PREFIX) === 0) return;
+            var url = streamUrl(qualities[label]);
+            if (!url || !/^https?:\/\//i.test(url)) return;
+            // Keep the ordinary qualities direct. They are few (the current item's 4K/1080p
+            // choices), remain useful to older players, and make the transport transparent.
+            // The large bridge-generated episode/voice/reserve graph is what belongs in the
+            // compressed table.
+            if (!isBridgeLabel(label)) {
+                packed[label] = url;
+                return;
+            }
+            var ref = transport.ref(url);
+            if (ref) packed[label] = ref;
+        });
+        if (includeBundle) {
+            var bundle = transport.encoded();
+            if (bundle) packed[BUNDLE_PREFIX] = bundle;
+        }
+        return Object.keys(packed).length ? packed : null;
+    }
+
     function compactPlaylistItem(item, data, link) {
         if (!item || typeof item !== 'object') return null;
         var compact = {};
@@ -340,15 +511,24 @@
         if (data.headers && typeof data.headers === 'object' && !Array.isArray(data.headers)) {
             compact.headers = data.headers;
         }
-        if (data.quality && typeof data.quality === 'object' && !Array.isArray(data.quality)) {
-            compact.quality = compactQualityMap(data.quality, data, link);
-        }
+        var topQuality = data.quality && typeof data.quality === 'object' && !Array.isArray(data.quality)
+            ? compactQualityMap(data.quality, data, link)
+            : null;
         ['url_reserve', 'timeline'].forEach(function (name) {
             if (data[name] != null) compact[name] = data[name];
         });
 
         var current = compactPlaylistItem(currentPlaylistItem(data, link), data, link);
-        if (current) compact.playlist = [current];
+        var transport = createTransportBundle();
+        if (topQuality) compact.quality = packQualityMap(topQuality, transport, false);
+        if (current) {
+            current.quality = packQualityMap(current.quality, transport, true) || current.quality;
+            compact.playlist = [current];
+        } else if (compact.quality) {
+            // A single-item source has no playlist item for Lampa to inspect, so the bundle
+            // must live beside its top-level quality map.
+            compact.quality[BUNDLE_PREFIX] = transport.encoded();
+        }
         return compact;
     }
 
@@ -786,7 +966,8 @@
         return label.indexOf(LABEL_PREFIX) === 0 ||
             label.indexOf(EPISODE_PREFIX) === 0 ||
             label.indexOf(METADATA_PREFIX) === 0 ||
-            label.indexOf(RESERVE_PREFIX) === 0;
+            label.indexOf(RESERVE_PREFIX) === 0 ||
+            label.indexOf(BUNDLE_PREFIX) === 0;
     }
 
     function selectedQualityLabel(data, primaryUrl) {
