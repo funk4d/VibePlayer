@@ -177,7 +177,7 @@ internal object QualityVariantParser {
         return labeledValues(intent)
             .mapNotNull { (label, value) ->
                 val uri = uriFromValue(value, transportUrls) ?: return@mapNotNull null
-                val parsedLabel = parseLabel(label) ?: return@mapNotNull null
+                val parsedLabel = parseLabel(label, transportUrls) ?: return@mapNotNull null
                 QualityVariant(
                     label = parsedLabel.quality,
                     uri = uri,
@@ -269,12 +269,12 @@ internal object QualityVariantParser {
             }
             .distinctBy { listOf(it.voiceoverLabel, it.episode?.season, it.episode?.episode, it.label, it.uri) }
 
-    internal fun parseLabel(rawLabel: String): ParsedVariantLabel? {
+    internal fun parseLabel(rawLabel: String, transportUrls: List<String> = emptyList()): ParsedVariantLabel? {
         val trimmed = rawLabel.trim().takeIf(String::isNotEmpty) ?: return null
         if (trimmed.startsWith(METADATA_PREFIX)) return null
         if (trimmed.startsWith(RESERVE_PREFIX)) return null
         if (trimmed.startsWith(BUNDLE_PREFIX)) return null
-        if (trimmed.startsWith(EPISODE_PREFIX)) return parseEpisodeLabel(trimmed)
+        if (trimmed.startsWith(EPISODE_PREFIX)) return parseEpisodeLabel(trimmed, transportUrls)
         if (!trimmed.startsWith(VOICEOVER_PREFIX)) return ParsedVariantLabel(trimmed)
 
         val parts = trimmed.removePrefix(VOICEOVER_PREFIX).split('|', limit = 2)
@@ -317,7 +317,7 @@ internal object QualityVariantParser {
             ?.takeIf { it >= 0 }
     }
 
-    private fun parseEpisodeLabel(rawLabel: String): ParsedVariantLabel {
+    private fun parseEpisodeLabel(rawLabel: String, transportUrls: List<String>): ParsedVariantLabel {
         val parts = rawLabel.removePrefix(EPISODE_PREFIX).split('|', limit = 9)
         // Older bridge builds emitted a trailing separator without a quality name for the
         // default episode stream.  It is still a perfectly usable episode; treating it as an
@@ -341,9 +341,17 @@ internal object QualityVariantParser {
             val hash = parts.getOrNull(7)
                 ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
                 ?.ifEmpty { null }
-            val resolveUrl = parts.getOrNull(8)
+            val rawResolveUrl = parts.getOrNull(8)
                 ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()).trim() }
-                ?.takeIf { it.startsWith("http", ignoreCase = true) }
+            val resolveUrl = when {
+                rawResolveUrl == null -> null
+                rawResolveUrl.startsWith(TRANSPORT_REF_PREFIX) -> {
+                    rawResolveUrl.removePrefix(TRANSPORT_REF_PREFIX)
+                        .toIntOrNull()
+                        ?.let { transportUrls.getOrNull(it) }
+                }
+                else -> rawResolveUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+            }
             ParsedVariantLabel(
                 quality = quality,
                 episode = EpisodeVariantInfo(

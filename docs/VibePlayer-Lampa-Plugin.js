@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.46.0';
+    var BRIDGE_VERSION = '0.47.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -496,25 +496,25 @@
             if (label.indexOf(BUNDLE_PREFIX) === 0) return;
             var url = streamUrl(qualities[label]);
             if (!url || !/^https?:\/\//i.test(url)) return;
-            // A non-current call-style episode carries its resolver endpoint as the
-            // value. It is already compact and must stay a normal HTTP URL: the Android
-            // side uses the same value to resolve the episode after selection. Putting
-            // these endpoints into the LZ table only adds overhead and defeats the
-            // transaction-size fix.
-            if (labelResolverUrl(label) === url) {
-                packed[label] = url;
-                return;
+
+            var packedLabel = label;
+            // The resolver belongs to the episode metadata, not to the quality value. Add
+            // it to the same URL table and replace the long signed address in the label by
+            // a short reference before the key reaches Android's quality_levels array.
+            var resolver = labelResolverUrl(label);
+            if (resolver && /^https?:\/\//i.test(resolver)) {
+                packedLabel = episodeLabelWithResolverRef(label, transport.ref(resolver));
             }
             // Keep the ordinary qualities direct. They are few (the current item's 4K/1080p
             // choices), remain useful to older players, and make the transport transparent.
             // The large bridge-generated episode/voice/reserve graph is what belongs in the
             // compressed table.
             if (!isBridgeLabel(label)) {
-                packed[label] = url;
+                packed[packedLabel] = url;
                 return;
             }
             var ref = transport.ref(url);
-            if (ref) packed[label] = ref;
+            if (ref) packed[packedLabel] = ref;
         });
         if (includeBundle) {
             var bundle = transport.encoded();
@@ -923,6 +923,19 @@
         } catch (error) {
             return null;
         }
+    }
+
+    /**
+     * Keep the per-episode resolver in the shared transport table instead of repeating a
+     * long signed URL in every quality label. The Android side resolves this short token
+     * against the same table when it parses the episode metadata.
+     */
+    function episodeLabelWithResolverRef(label, resolverRef) {
+        if (typeof label !== 'string' || label.indexOf(EPISODE_PREFIX) !== 0 || !resolverRef) return label;
+        var parts = label.slice(EPISODE_PREFIX.length).split('|');
+        if (parts.length < 9) return label;
+        parts[8] = encodeURIComponent(resolverRef);
+        return EPISODE_PREFIX + parts.join('|');
     }
 
     /**

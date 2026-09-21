@@ -163,7 +163,7 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.46.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.47.0');
 
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
@@ -173,7 +173,7 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.46.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.47.0'));
 
 // A direct source call may never touch Lampa.Player.play. The JSON hook still has to compact
 // the object at the moment MODS serializes it for AndroidJS.
@@ -307,8 +307,12 @@ assert(JSON.stringify(resolverBounded).length < 500000);
 const resolverEpisodeLabel = Object.keys(resolverBounded.quality)
     .find((label) => label.startsWith('@VIBEEPISODE@1|1|'));
 assert.equal(
-    resolverBounded.quality[resolverEpisodeLabel],
-    resolverPlaylist[0].url,
+    resolverBounded.quality[resolverEpisodeLabel].startsWith('vibe://ref/'),
+    true,
+);
+assert(
+    resolverEpisodeLabel.split('|')[8].includes('vibe%3A%2F%2Fref%2F'),
+    'episode resolver should be a transport reference inside the label',
 );
 const currentResolverLabel = Object.keys(resolverBounded.quality)
     .find((label) => label.startsWith('@VIBEEPISODE@1|200|'));

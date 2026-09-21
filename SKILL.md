@@ -125,7 +125,7 @@ The optional Lampa bridge lives in `docs/VibePlayer-Lampa-Plugin.js` and is inte
 Use these reserved labels:
 
 - `@VIBEVOICE@<encoded-name>|<encoded-quality>` for direct/per-quality voiceover URLs.
-- `@VIBEEPISODE@<season>|<episode>|<percent>|<timeline-seconds>|<encoded-title>|<encoded-quality>|<encoded-voice>|<encoded-timeline-hash>|<encoded-resolve-url>` for every episode the source has loaded. The trailing three fields are what make the player able to answer questions it otherwise cannot: which voices exist for the episode just switched to, which entry in Lampa's timeline this episode is, and where to ask for its other qualities.
+- `@VIBEEPISODE@<season>|<episode>|<percent>|<timeline-seconds>|<encoded-title>|<encoded-quality>|<encoded-voice>|<encoded-timeline-hash>|<encoded-resolve-url-or-vibe-ref>` for every episode the source has loaded. The trailing three fields are what make the player able to answer questions it otherwise cannot: which voices exist for the episode just switched to, which entry in Lampa's timeline this episode is, and where to ask for its other qualities. Large resolver URLs are stored in the compressed `@VIBEBUNDLE@` table and may appear here as `vibe://ref/N`.
 - `@VIBEMETA@<encoded-title>|<encoded-source>` for top-overlay display metadata; pair it with the current URL, then filter it out of VibePlayer's quality menu.
 - `@VIBERESERVE@<order>|<encoded-label>` for the backup addresses a source ships in `url_reserve` and `quality_reserve`. Order them with the reserve for the playing quality first, drop any that repeat the primary URL, and filter them out of VibePlayer's quality menu — they are transport for `SourceLadder`, not user-selectable qualities.
 

@@ -64,6 +64,16 @@ class QualityVariantParserTest {
     }
 
     @Test
+    fun resolvesEpisodeResolverReferenceFromTransportBundle() {
+        val parsed = QualityVariantParser.parseLabel(
+            "@VIBEEPISODE@1|2|0|0|Second|1080p|Dub|hash|vibe%3A%2F%2Fref%2F1",
+            listOf("https://resolver.example/one", "https://resolver.example/two"),
+        )
+
+        assertEquals("https://resolver.example/two", parsed?.episode?.resolveUrl)
+    }
+
+    @Test
     fun acceptsLegacyEpisodeLabelWithoutQuality() {
         val parsed = QualityVariantParser.parseLabel(
             "@VIBEEPISODE@1|1|0|29|Tractoring%20Series%201|",
