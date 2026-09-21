@@ -163,7 +163,7 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.47.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.48.0');
 
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
@@ -173,7 +173,7 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.47.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.48.0'));
 
 // A direct source call may never touch Lampa.Player.play. The JSON hook still has to compact
 // the object at the moment MODS serializes it for AndroidJS.
@@ -334,6 +334,9 @@ assert.equal(unrelated.title, undefined);
 assert(Object.keys(unrelated.quality).some((label) => label.startsWith('@VIBEDIAG@')));
 assert(Object.keys(unrelated.quality).some((label) => label.startsWith('@VIBEMETA@')));
 assert(Object.keys(unrelated.quality).includes('@VIBEBUNDLE@'));
+const diagnosticLabels = Object.keys(unrelated.quality).filter((label) => label.startsWith('@VIBEDIAG@'));
+assert.equal(diagnosticLabels.length, 1);
+assert(diagnosticLabels[0].length < 80, 'diagnostic labels must stay bounded');
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
 // 10 top-level fields (including the current MODS `translate` collection). It must never
