@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.44.0';
+    var BRIDGE_VERSION = '0.45.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -212,13 +212,40 @@
             item.translation,
             item.dubbing,
             item.dub,
-            item.language
+            item.language,
+            item.translation_name,
+            item.dubbing_name,
+            item.voiceover_name,
+            item.translator,
+            item.dub_name
         ]);
     }
 
     function itemVoiceName(item, fallback) {
-        return explicitVoiceName(item) ||
-            (sourceItemVoices && item && typeof item === 'object' && sourceItemVoices.get(item)) ||
+        var explicit = explicitVoiceName(item);
+        if (explicit) return explicit;
+
+        // The current MODS card puts the translation beside the resolution in a display
+        // field (for example `480p / MVO [720, Anything Group]`) instead of repeating a
+        // voice_name property on every episode.  Extract only the non-resolution part; a
+        // plain `480p` must not become a fake voice.
+        var qualityText = firstDisplayName([
+            item && item.quality_label,
+            item && item.quality_name,
+            item && item.translation_label,
+            item && item.dubbing_label
+        ]);
+        if (qualityText) {
+            var voice = plainText(qualityText)
+                .replace(/\b(?:2160|1440|1080|720|576|480|360)p\b/gi, ' ')
+                .replace(/\[[^\]]*\]/g, ' ')
+                .replace(/^\s*[\/:|,-]+\s*/, '')
+                .replace(/\s*[\/:|,-]+\s*$/g, '')
+                .trim();
+            if (voice) return voice;
+        }
+
+        return (sourceItemVoices && item && typeof item === 'object' && sourceItemVoices.get(item)) ||
             plainText(fallback);
     }
 
@@ -276,8 +303,8 @@
     function metadataLabel(title, source, probe, data) {
         return METADATA_PREFIX + encodeURIComponent(title || '') + '|' +
             encodeURIComponent(source || '') + '|' + probe + '|' +
-            integer(data && data.season, 0) + '|' +
-            integer(data && data.episode, 0) + '|' +
+            seasonNumber(data, 0) + '|' +
+            (episodeNumber(data) || 0) + '|' +
             encodeURIComponent(plainText(data && data.voice_name) || '') + '|' +
             BRIDGE_VERSION;
     }
@@ -496,11 +523,11 @@
             if (ownsStreamUrl(playlist[index], expectedUrl)) return playlist[index];
         }
 
-        var season = integer(data.season, -1);
-        var episode = integer(data.episode, -1);
+        var season = seasonNumber(data, -1);
+        var episode = episodeNumber(data) || -1;
         for (var i = 0; i < playlist.length; i += 1) {
             var item = playlist[i];
-            if (item && integer(item.season, -2) === season && integer(item.episode, -2) === episode) {
+            if (item && seasonNumber(item, -2) === season && episodeNumber(item) === episode) {
                 return item;
             }
         }
@@ -800,8 +827,8 @@
     function episodeLabel(item, quality) {
         var timeline = item && item.timeline || {};
         var fields = [
-            integer(item && item.season, 0),
-            integer(item && item.episode, 0),
+            seasonNumber(item, 0),
+            episodeNumber(item) || 0,
             Math.max(0, Math.min(100, integer(timeline.percent, 0))),
             Math.max(0, integer(timeline.time, 0)),
             encodeURIComponent(plainText(item && item.title) || ''),
@@ -892,9 +919,74 @@
         return single ? [{ label: plainText(item && item.quality_label) || 'Auto', url: single }] : [];
     }
 
+    function numberFromValue(value, patterns) {
+        if (typeof value === 'number' && isFinite(value)) return Math.floor(value);
+        if (typeof value !== 'string') {
+            if (value && typeof value === 'object') {
+                for (var key = 0; key < patterns.length; key += 1) {
+                    var nested = numberFromValue(value[patterns[key]], [/^\s*(\d+)\s*$/]);
+                    if (nested != null) return nested;
+                }
+            }
+            return null;
+        }
+        var text = plainText(value);
+        if (!text) return null;
+        var direct = text.match(/^\s*(\d+)\s*$/);
+        if (direct) return parseInt(direct[1], 10);
+        for (var index = 0; index < patterns.length; index += 1) {
+            var matched = text.match(patterns[index]);
+            if (matched) return parseInt(matched[1], 10);
+        }
+        return null;
+    }
+
+    function itemDisplayText(item) {
+        return firstDisplayName([
+            item && item.title,
+            item && item.label,
+            item && item.name,
+            item && item.episode_title,
+            item && item.episodeTitle
+        ]);
+    }
+
+    function seasonNumber(item, fallback) {
+        var fields = ['season', 'season_number', 'seasonNumber', 'series', 's'];
+        var patterns = [/^\s*S(?:eason)?\s*0*(\d+)\s*$/i, /^\s*(?:сезон|сез.)\s*0*(\d+)\s*$/i];
+        for (var index = 0; index < fields.length; index += 1) {
+            var value = numberFromValue(item && item[fields[index]], patterns);
+            if (value != null && value >= 0) return value;
+        }
+        var text = itemDisplayText(item);
+        if (text) {
+            var matched = text.match(/\bS(?:eason)?\s*0*(\d+)/i) ||
+                text.match(/\b(?:сезон|сез.)\s*0*(\d+)/i);
+            if (matched) return parseInt(matched[1], 10);
+        }
+        return fallback;
+    }
+
     function episodeNumber(item) {
-        var value = parseInt(item && item.episode, 10);
-        return isFinite(value) && value > 0 ? value : null;
+        var fields = ['episode', 'episode_number', 'episodeNumber', 'ep', 'e', 'number', 'num'];
+        var patterns = [
+            /^\s*E(?:pisode|p)?\s*0*(\d+)\s*$/i,
+            /^\s*(?:серія|серия|сер.)\s*0*(\d+)\s*$/i,
+            /^\s*(?:episode|епізод|эпизод)\s*0*(\d+)\s*$/i
+        ];
+        for (var index = 0; index < fields.length; index += 1) {
+            var value = numberFromValue(item && item[fields[index]], patterns);
+            if (value != null && value > 0) return value;
+        }
+
+        var text = itemDisplayText(item);
+        if (text) {
+            var matched = text.match(/\bS(?:eason)?\s*\d+\s*[:x/\\.-]\s*E?(?:pisode|p)?\s*0*(\d+)/i) ||
+                text.match(/\b(?:E|Episode|Ep)\s*0*(\d+)/i) ||
+                text.match(/\b(?:серія|серия|сер.|епізод|эпизод)\s*0*(\d+)/i);
+            if (matched) return parseInt(matched[1], 10);
+        }
+        return null;
     }
 
     /**
@@ -909,8 +1001,8 @@
         var seen = {};
         var seenEpisodes = {};
         var serialized = 0;
-        var currentSeason = integer(data && data.season, -1);
-        var currentEpisode = integer(data && data.episode, -1);
+        var currentSeason = seasonNumber(data, -1);
+        var currentEpisode = episodeNumber(data) || -1;
         var currentVoice = itemVoiceName(data) || plainText(data && data.voice_name) || '';
 
         // The object can be handed to openPlayer more than once, and an older bridge may
@@ -925,7 +1017,7 @@
             var number = episodeNumber(item);
             if (!number) return;
             var voice = itemVoiceName(item) || '';
-            var base = voice + '|' + integer(item.season, 0) + 'x' + number;
+            var base = voice + '|' + seasonNumber(item, 0) + 'x' + number;
             seenEpisodes[base] = true;
 
             // Only the episode currently being launched needs every quality. For all other
@@ -933,7 +1025,7 @@
             // advertised resolve endpoint for its remaining qualities. Keeping every quality
             // for every episode is what turns a normal series into an 800-KB Intent.
             var isCurrent = number === currentEpisode &&
-                (currentSeason < 0 || integer(item.season, -1) === currentSeason) &&
+                (currentSeason < 0 || seasonNumber(item, -1) === currentSeason) &&
                 (!currentVoice || !voice || voice === currentVoice);
             var variants = isCurrent ? itemQualities(item) : itemQualities(item).slice(0, 1);
             variants.forEach(function (entry) {
@@ -950,7 +1042,7 @@
             if (!item || typeof item !== 'object') return;
             var number = episodeNumber(item);
             var voice = itemVoiceName(item) || '';
-            var base = voice + '|' + integer(item.season, 0) + 'x' + number;
+            var base = voice + '|' + seasonNumber(item, 0) + 'x' + number;
             if (!number || seenEpisodes[base]) return;
             seenEpisodes[base] = true;
             var variants = item.quality;
@@ -960,7 +1052,7 @@
                     return Boolean(streamUrl(variants[quality]));
                 });
                 var isCurrent = number === currentEpisode &&
-                    (currentSeason < 0 || integer(item.season, -1) === currentSeason) &&
+                    (currentSeason < 0 || seasonNumber(item, -1) === currentSeason) &&
                     (!currentVoice || !voice || voice === currentVoice);
                 (isCurrent ? labels : labels.slice(0, 1)).forEach(function (quality) {
                     var entry = { url: streamUrl(variants[quality]) };
@@ -1140,14 +1232,14 @@
         // A series source normally keeps the alternatives in folder[voice][season] rather
         // than in data.voiceovers.  Include only the episode being launched; serialising every
         // episode as a standalone voice would mix sources and make the menu lie.
-        var currentSeason = integer(data && data.season, -1);
-        var currentEpisode = integer(data && data.episode, -1);
+        var currentSeason = seasonNumber(data, -1);
+        var currentEpisode = episodeNumber(data) || -1;
         var sourceVoiceovers = 0;
         if (currentEpisode > 0) {
             allSourceItems().forEach(function (item) {
                 var name = itemVoiceName(item);
-                if (!name || integer(item && item.episode, -1) !== currentEpisode) return;
-                if (currentSeason >= 0 && integer(item && item.season, -1) !== currentSeason) return;
+                if (!name || episodeNumber(item) !== currentEpisode) return;
+                if (currentSeason >= 0 && seasonNumber(item, -1) !== currentSeason) return;
                 sourceVoiceovers += 1;
                 serialized += addVoiceoverItem(qualities, item, sourceVoiceovers, name);
             });
@@ -1468,7 +1560,7 @@
         items.forEach(function (item) {
             var voice = itemVoiceName(item);
             if (voice && voices.indexOf(voice) === -1) voices.push(voice);
-            var season = integer(item.season, -1);
+            var season = seasonNumber(item, -1);
             if (season >= 0 && seasons.indexOf(season) === -1) seasons.push(season);
         });
         return {
