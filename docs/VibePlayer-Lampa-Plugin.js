@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.43.0';
+    var BRIDGE_VERSION = '0.44.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -815,22 +815,28 @@
             // Where this episode's per-quality addresses can be asked for. The source keeps
             // one default address per episode and hands out the rest only on request, which
             // is what Lampa does when the viewer picks an episode.
-            encodeURIComponent(
-                (item && item.method === 'call' && nonEmptyString(item.url)) || ''
-            )
+            encodeURIComponent(episodeResolverUrl(item) || '')
         ];
         return EPISODE_PREFIX + fields.join('|');
     }
 
-    // MODS' call-style episode object has an API endpoint in `url` and the already
-    // resolved media address in `stream`.  For an episode that is not being launched
-    // right now, the endpoint is the useful transport value: VibePlayer can ask it for
-    // the quality map after the viewer picks that episode.  Carrying every signed media
-    // URL for every voice/season is what pushed Android's Binder transaction over its
-    // device-specific limit.  The current episode still carries its real addresses so
-    // the initial quality and voice menus open without another request.
+    // MODS' newer episode object keeps the resolver in `url` and the already resolved
+    // media address in `stream`, but no longer sets `method: 'call'`. Older builds did
+    // set that method. Treat both shapes as a resolver pair. A URL that is itself a
+    // media file remains a direct transport value; a different non-media URL is the
+    // short endpoint VibePlayer can ask for after the viewer picks that episode.
     function episodeResolverUrl(item) {
-        return item && item.method === 'call' ? nonEmptyString(item.url) : null;
+        if (!item || typeof item !== 'object') return null;
+        var candidate = nonEmptyString(item.url);
+        if (!candidate) return null;
+        if (item.method === 'call') return candidate;
+
+        var resolved = itemStream(item);
+        if (!resolved || resolved === candidate) return null;
+        // Do not misclassify a second media URL as an API endpoint. MODS' resolver
+        // addresses are ordinary HTTP URLs without a media suffix.
+        if (/\.(?:m3u8|mp4|mkv|webm|avi|mov|mpd)(?:[?#]|$)/i.test(candidate)) return null;
+        return candidate;
     }
 
     function episodeTransportValue(item, entry, current) {
