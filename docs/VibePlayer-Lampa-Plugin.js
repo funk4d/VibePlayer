@@ -1,12 +1,13 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.45.0';
+    var BRIDGE_VERSION = '0.46.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
     var RESERVE_PREFIX = '@VIBERESERVE@';
     var BUNDLE_PREFIX = '@VIBEBUNDLE@';
+    var DIAGNOSTIC_PREFIX = '@VIBEDIAG@';
 
     var INSTALL_ATTEMPTS = 60;
     var INSTALL_INTERVAL_MS = 500;
@@ -339,8 +340,47 @@
             if (label.indexOf(METADATA_PREFIX) === 0) delete qualities[label];
         });
         qualities[metadataLabel(title, source, captureProbe(matched), data)] = url;
+        // Temporary structural probe for the current MODS rollout. It contains only field
+        // names and value shapes; never include addresses, cookies, or titles here.
+        qualities[diagnosticLabel(data, link)] = url;
         data.quality = qualities;
         return 1;
+    }
+
+    function diagnosticValueShape(value) {
+        if (value == null) return 'null';
+        if (Array.isArray(value)) return 'array' + value.length;
+        if (typeof value === 'object') return 'object:' + Object.keys(value).slice(0, 24).join(',');
+        if (typeof value !== 'string') return typeof value;
+        var flags = [];
+        if (/^\s*\d+\s*$/.test(value)) flags.push('number');
+        if (/\bS(?:eason)?\s*\d+/i.test(value) || /сезон/i.test(value)) flags.push('season');
+        if (/\bE(?:pisode|p)?\s*\d+/i.test(value) || /(?:серія|серия|епізод|эпизод)/i.test(value)) flags.push('episode');
+        if (/\d{3,4}p/i.test(value)) flags.push('quality');
+        if (/^https?:\/\//i.test(value)) flags.push('url');
+        return 'string' + value.length + ':' + flags.join('.');
+    }
+
+    function diagnosticObjectShape(value) {
+        if (!value || typeof value !== 'object') return 'none';
+        return Object.keys(value).slice(0, 32).map(function (key) {
+            return key + '=' + diagnosticValueShape(value[key]);
+        }).join(';');
+    }
+
+    function diagnosticLabel(data, link) {
+        var current = currentPlaylistItem(data, link);
+        var source = allSourceItems().slice(0, 2);
+        var top = diagnosticObjectShape(data);
+        var playlist = Array.isArray(data && data.playlist)
+            ? data.playlist.slice(0, 3).map(diagnosticObjectShape).join('||')
+            : 'none';
+        var sourceShape = source.map(diagnosticObjectShape).join('||') || 'none';
+        var currentShape = diagnosticObjectShape(current);
+        return DIAGNOSTIC_PREFIX + 'top=' + encodeURIComponent(top) +
+            '|playlist=' + encodeURIComponent(playlist) +
+            '|current=' + encodeURIComponent(currentShape) +
+            '|source=' + encodeURIComponent(sourceShape);
     }
 
     function decodePayload(payload) {
@@ -1105,7 +1145,8 @@
             label.indexOf(EPISODE_PREFIX) === 0 ||
             label.indexOf(METADATA_PREFIX) === 0 ||
             label.indexOf(RESERVE_PREFIX) === 0 ||
-            label.indexOf(BUNDLE_PREFIX) === 0;
+            label.indexOf(BUNDLE_PREFIX) === 0 ||
+            label.indexOf(DIAGNOSTIC_PREFIX) === 0;
     }
 
     function selectedQualityLabel(data, primaryUrl) {
