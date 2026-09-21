@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.42.0';
+    var BRIDGE_VERSION = '0.43.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
@@ -429,6 +429,15 @@
             if (label.indexOf(BUNDLE_PREFIX) === 0) return;
             var url = streamUrl(qualities[label]);
             if (!url || !/^https?:\/\//i.test(url)) return;
+            // A non-current call-style episode carries its resolver endpoint as the
+            // value. It is already compact and must stay a normal HTTP URL: the Android
+            // side uses the same value to resolve the episode after selection. Putting
+            // these endpoints into the LZ table only adds overhead and defeats the
+            // transaction-size fix.
+            if (labelResolverUrl(label) === url) {
+                packed[label] = url;
+                return;
+            }
             // Keep the ordinary qualities direct. They are few (the current item's 4K/1080p
             // choices), remain useful to older players, and make the transport transparent.
             // The large bridge-generated episode/voice/reserve graph is what belongs in the
@@ -813,6 +822,36 @@
         return EPISODE_PREFIX + fields.join('|');
     }
 
+    // MODS' call-style episode object has an API endpoint in `url` and the already
+    // resolved media address in `stream`.  For an episode that is not being launched
+    // right now, the endpoint is the useful transport value: VibePlayer can ask it for
+    // the quality map after the viewer picks that episode.  Carrying every signed media
+    // URL for every voice/season is what pushed Android's Binder transaction over its
+    // device-specific limit.  The current episode still carries its real addresses so
+    // the initial quality and voice menus open without another request.
+    function episodeResolverUrl(item) {
+        return item && item.method === 'call' ? nonEmptyString(item.url) : null;
+    }
+
+    function episodeTransportValue(item, entry, current) {
+        var resolver = episodeResolverUrl(item);
+        if (!current && resolver) return resolver;
+        return entry && nonEmptyString(entry.url);
+    }
+
+    function labelResolverUrl(label) {
+        if (typeof label !== 'string' || label.indexOf(EPISODE_PREFIX) !== 0) return null;
+        // Keep this parser local and forgiving; labels are ours but may have been
+        // emitted by an older bridge and then handed back to us on a second open.
+        var raw = label.slice(EPISODE_PREFIX.length).split('|');
+        if (raw.length < 9 || !raw[8]) return null;
+        try {
+            return decodeURIComponent(raw[8]) || null;
+        } catch (error) {
+            return null;
+        }
+    }
+
     /**
      * Every address an episode has, by quality name.
      *
@@ -895,7 +934,7 @@
                 var key = base + '|' + entry.label;
                 if (seen[key]) return;
                 seen[key] = true;
-                qualities[episodeLabel(item, entry.label)] = entry.url;
+                qualities[episodeLabel(item, entry.label)] = episodeTransportValue(item, entry, isCurrent);
                 serialized += 1;
             });
         });
@@ -918,7 +957,8 @@
                     (currentSeason < 0 || integer(item.season, -1) === currentSeason) &&
                     (!currentVoice || !voice || voice === currentVoice);
                 (isCurrent ? labels : labels.slice(0, 1)).forEach(function (quality) {
-                    qualities[episodeLabel(item, quality)] = streamUrl(variants[quality]);
+                    var entry = { url: streamUrl(variants[quality]) };
+                    qualities[episodeLabel(item, quality)] = episodeTransportValue(item, entry, isCurrent);
                     serialized += 1;
                 });
             } else {

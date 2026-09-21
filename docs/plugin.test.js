@@ -163,7 +163,7 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.42.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.43.0');
 
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
@@ -173,7 +173,7 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.42.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.43.0'));
 
 // A direct source call may never touch Lampa.Player.play. The JSON hook still has to compact
 // the object at the moment MODS serializes it for AndroidJS.
@@ -277,6 +277,46 @@ const bounded = JSON.parse(forwardedPayload);
 assert(bounded.playlist && bounded.playlist.length === 1);
 assert(JSON.stringify(bounded).length < 700000);
 
+// Call-style MODS entries can carry a large signed media URL plus a much smaller
+// resolver endpoint. Non-current entries must transport the endpoint, not every
+// signed URL, otherwise a real series still crosses the TCL Binder limit.
+const resolverPlaylist = Array.from({ length: 400 }, (_, index) => ({
+    season: 1,
+    episode: index + 1,
+    method: 'call',
+    url: 'https://resolver.example/episode/' + (index + 1) + '?token=' + 'r'.repeat(220),
+    stream: 'https://signed.example/episode/' + (index + 1) + '?token=' +
+        String(index).padStart(3, '0') + '-' + 'x'.repeat(1900),
+    quality: {
+        '1080p': 'https://signed.example/episode/' + (index + 1) + '?token=' +
+            String(index).padStart(3, '0') + '-' + 'x'.repeat(1900)
+    }
+}));
+forwardedPayload = null;
+context.Lampa.Android.openPlayer(
+    resolverPlaylist[199].stream,
+    JSON.stringify({
+        url: resolverPlaylist[199].stream,
+        season: 1,
+        episode: 200,
+        playlist: resolverPlaylist
+    })
+);
+const resolverBounded = JSON.parse(forwardedPayload);
+assert(JSON.stringify(resolverBounded).length < 500000);
+const resolverEpisodeLabel = Object.keys(resolverBounded.quality)
+    .find((label) => label.startsWith('@VIBEEPISODE@1|1|'));
+assert.equal(
+    resolverBounded.quality[resolverEpisodeLabel],
+    resolverPlaylist[0].url,
+);
+const currentResolverLabel = Object.keys(resolverBounded.quality)
+    .find((label) => label.startsWith('@VIBEEPISODE@1|200|'));
+assert.equal(
+    resolverBounded.quality[currentResolverLabel],
+    'vibe://ref/0',
+);
+
 // A launch that belongs to no captured entry is enriched with nothing at all.
 forwardedPayload = null;
 context.Lampa.Android.openPlayer(
@@ -288,7 +328,7 @@ assert.equal(context.window.VibePlayerBridge.lastStats.captured, false);
 assert.equal(unrelated.title, undefined);
 // Only the diagnostic label, carrying no title, no source and no stream of its own.
 assert.deepEqual(Object.keys(unrelated.quality), [
-    '@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.42.0',
+    '@VIBEMETA@||c0p1v1f10n0s0w0|0|0||0.43.0',
     '@VIBEBUNDLE@'
 ]);
 
