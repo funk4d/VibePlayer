@@ -1,13 +1,14 @@
 (function () {
     'use strict';
 
-    var BRIDGE_VERSION = '0.48.0';
+    var BRIDGE_VERSION = '0.49.0';
     var LABEL_PREFIX = '@VIBEVOICE@';
     var EPISODE_PREFIX = '@VIBEEPISODE@';
     var METADATA_PREFIX = '@VIBEMETA@';
     var RESERVE_PREFIX = '@VIBERESERVE@';
     var BUNDLE_PREFIX = '@VIBEBUNDLE@';
     var DIAGNOSTIC_PREFIX = '@VIBEDIAG@';
+    var SUBTITLE_PREFIX = '@VIBESUB@';
 
     var INSTALL_ATTEMPTS = 60;
     var INSTALL_INTERVAL_MS = 500;
@@ -660,6 +661,7 @@
             captured: false,
             headers: 0,
             reserves: 0,
+            subtitles: 0,
             voiceovers: { total: 0, serialized: 0 },
             episodes: { total: 0, serialized: 0 }
         };
@@ -668,6 +670,7 @@
                 stats.captured = enrichFromCapturedPlayback(data, capturedPlayback, link);
                 stats.headers = addPlaybackHeaders(data);
                 stats.reserves = serializeReserves(link, data);
+                stats.subtitles = serializeSubtitles(data, link);
                 stats.metadata = serializeMetadata(link, data, stats.captured);
                 stats.voiceovers = serializeVoiceovers(data);
                 stats.episodes = serializeEpisodes(data);
@@ -751,7 +754,7 @@
     var SESSION_FIELDS = [
         'title', 'movie_title', 'source_name', 'provider_name', 'balancer_name',
         'source', 'provider', 'balancer', 'online', 'voiceovers', 'translate', 'playlist',
-        'subtitles', 'subtitle', 'tracks', 'poster'
+        'subtitles', 'subtitle', 'subs', 'tracks', 'poster'
     ];
 
     // Describes one specific stream. Belongs to whichever entry owns the launched URL,
@@ -831,6 +834,100 @@
         if (!url) return 0;
         target[encodedLabel(name, quality)] = url;
         return 1;
+    }
+
+    function subtitleEntries(value) {
+        if (Array.isArray(value)) return value;
+        if (typeof value === 'string') return [value];
+        if (!value || typeof value !== 'object') return [];
+        if (streamUrl(value)) return [value];
+
+        return Object.keys(value).map(function (name) {
+            var entry = value[name];
+            if (typeof entry === 'string') return { url: entry, label: name };
+            if (entry && typeof entry === 'object') return Object.assign({ label: name }, entry);
+            return null;
+        }).filter(Boolean);
+    }
+
+    function subtitleMimeType(entry, url) {
+        var declared = nonEmptyString(entry && (
+            entry.mime_type || entry.mimeType || entry.mime || entry.format
+        ));
+        var value = declared ? declared.toLowerCase().split(';')[0].trim() : '';
+        if (value === 'vtt' || value === 'webvtt' || value === 'text/vtt') return 'text/vtt';
+        if (value === 'srt' || value === 'subrip' || value === 'application/subrip' || value === 'application/x-subrip') {
+            return 'application/x-subrip';
+        }
+        if (value === 'ttml' || value === 'dfxp' || value === 'application/ttml+xml' || value === 'application/ttml') {
+            return 'application/ttml+xml';
+        }
+        if (value === 'ssa' || value === 'ass' || value === 'text/x-ssa' || value === 'application/x-ass') {
+            return 'text/x-ssa';
+        }
+
+        var path = String(url || '').split(/[?#]/)[0].toLowerCase();
+        if (/\.vtt$/.test(path)) return 'text/vtt';
+        if (/\.(?:ttml|dfxp|xml)$/.test(path)) return 'application/ttml+xml';
+        if (/\.(?:ssa|ass)$/.test(path)) return 'text/x-ssa';
+        // Lampa's subtitles contract defaults extension-less subtitle URLs to SubRip.
+        return 'application/x-subrip';
+    }
+
+    function subtitleLabel(entry, index, url) {
+        var language = firstDisplayName([
+            entry && entry.language,
+            entry && entry.lang,
+            entry && entry.srclang
+        ]) || '';
+        var name = firstDisplayName([
+            entry && entry.label,
+            entry && entry.title,
+            entry && entry.name,
+            language
+        ]) || ('Subtitle ' + (index + 1));
+        var mime = subtitleMimeType(entry, url);
+        var flags = integer(entry && (entry.selection_flags || entry.selectionFlags), 0) & 3;
+        if (entry && (entry.default === true || entry.is_default === true)) flags |= 1;
+        if (entry && (entry.forced === true || entry.is_forced === true)) flags |= 2;
+        return SUBTITLE_PREFIX + encodeURIComponent(name) + '|' +
+            encodeURIComponent(language) + '|' + encodeURIComponent(mime) + '|' + flags;
+    }
+
+    function serializeSubtitles(data, link) {
+        if (!data || typeof data !== 'object') return 0;
+        var current = currentPlaylistItem(data, link);
+        var collection = current && (current.subtitles != null
+            ? current.subtitles
+            : current.subtitle != null ? current.subtitle : current.subs);
+        if (collection == null) {
+            collection = data.subtitles != null
+                ? data.subtitles
+                : data.subtitle != null ? data.subtitle : data.subs;
+        }
+
+        var quality = Object.assign({}, data.quality || {});
+        if (collection == null) {
+            return Object.keys(quality).filter(function (label) {
+                return label.indexOf(SUBTITLE_PREFIX) === 0;
+            }).length;
+        }
+        Object.keys(quality).forEach(function (label) {
+            if (label.indexOf(SUBTITLE_PREFIX) === 0) delete quality[label];
+        });
+
+        var entries = subtitleEntries(collection);
+        var serialized = 0;
+        var seen = {};
+        entries.slice(0, 16).forEach(function (entry, index) {
+            var url = streamUrl(entry);
+            if (!url || seen[url]) return;
+            seen[url] = true;
+            quality[subtitleLabel(entry, index, url)] = url;
+            serialized += 1;
+        });
+        if (serialized || data.quality) data.quality = quality;
+        return serialized;
     }
 
     function integer(value, fallback) {
@@ -1132,6 +1229,7 @@
             label.indexOf(EPISODE_PREFIX) === 0 ||
             label.indexOf(METADATA_PREFIX) === 0 ||
             label.indexOf(RESERVE_PREFIX) === 0 ||
+            label.indexOf(SUBTITLE_PREFIX) === 0 ||
             label.indexOf(BUNDLE_PREFIX) === 0 ||
             label.indexOf(DIAGNOSTIC_PREFIX) === 0;
     }
@@ -1662,6 +1760,7 @@
         episodePrefix: EPISODE_PREFIX,
         metadataPrefix: METADATA_PREFIX,
         reservePrefix: RESERVE_PREFIX,
+        subtitlePrefix: SUBTITLE_PREFIX,
         installed: false,
         sourceSummary: function () { return sourceSummary(); },
         lastSource: { items: 0, withStream: 0, voices: [], seasons: [] },
@@ -1670,6 +1769,7 @@
             captured: false,
             headers: 0,
             reserves: 0,
+            subtitles: 0,
             voiceovers: { total: 0, serialized: 0 },
             episodes: { total: 0, serialized: 0 }
         },

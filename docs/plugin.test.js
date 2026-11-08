@@ -60,6 +60,10 @@ const captured = {
         '1080p': 'https://backup.example/current-1080.mp4',
         '720p': 'https://backup.example/current-720.mp4'
     },
+    subtitles: [
+        { url: 'https://subs.example/current-en.srt?token=hidden', label: 'English', language: 'en' },
+        { url: 'https://subs.example/current-uk.vtt?token=hidden', label: 'Українська', language: 'uk' }
+    ],
     voiceovers: [{
         title: 'Dub',
         quality: {
@@ -132,6 +136,11 @@ assert(labels.some((label) => label.startsWith('@VIBEMETA@The%20Series|Alloha'))
 assert(labels.some((label) => label.startsWith('@VIBEVOICE@Dub|720p')));
 assert(labels.some((label) => label.startsWith('@VIBEVOICE@ColdFilm|720p')));
 assert(labels.some((label) => label.startsWith('@VIBEEPISODE@1|2|94|122|Second%20Episode|1080p')));
+const subtitleLabels = labels.filter((label) => label.startsWith('@VIBESUB@'));
+assert.equal(subtitleLabels.length, 2);
+assert.equal(decodeURIComponent(subtitleLabels[0].slice('@VIBESUB@'.length).split('|')[0]), 'English');
+assert.equal(subtitleLabels[0].split('|')[2], 'application%2Fx-subrip');
+assert.equal(subtitleLabels[1].split('|')[2], 'text%2Fvtt');
 assert(!labels.some((label) => label === '@VIBEEPISODE@1|1|0|29|Old%20shape|'));
 // Markup from the page must never reach the player's overlay.
 const episodeLabel = labels.find((label) => label.startsWith('@VIBEEPISODE@1|2|'));
@@ -147,6 +156,9 @@ assert(reserves.length === 3);
 assert(reserves.every((value) => value.startsWith('vibe://ref/')));
 assert(Object.keys(forwarded.quality).includes('@VIBEBUNDLE@'));
 assert.equal(context.window.VibePlayerBridge.lastStats.reserves, 3);
+assert.equal(context.window.VibePlayerBridge.lastStats.subtitles, 2);
+assert(subtitleLabels.every((label) => forwarded.quality[label].startsWith('vibe://ref/')));
+assert(!logs.join('\n').includes('subs.example'));
 assert(!reserves.includes('https://backup.example/current.mp4'));
 assert.equal(forwarded.headers.Cookie, 'source-provided-cookie');
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
@@ -163,7 +175,7 @@ assert.deepEqual(
     'the bridge must not add headers of its own',
 );
 assert.equal(forwarded.headers['X-Source-Header'], 'source-provided-value');
-assert.equal(context.window.VibePlayerBridge.version, '0.48.0');
+assert.equal(context.window.VibePlayerBridge.version, '0.49.0');
 
 assert.equal(context.window.VibePlayerBridge.lastStats.captured, true);
 assert.equal(context.window.VibePlayerBridge.lastStats.headers, 7);
@@ -173,14 +185,17 @@ const fetchTargets = [...pluginSource.matchAll(/fetch\s*\(\s*([A-Za-z_$][\w$]*)/
 assert.deepEqual([...new Set(fetchTargets)], ['PROGRESS_ENDPOINT'], 'fetch may only reach the player');
 assert(/PROGRESS_ENDPOINT\s*=\s*'http:\/\/127\.0\.0\.1:/.test(pluginSource), 'loopback only');
 assert(!/XMLHttpRequest|Lampa\.Reguest|Lampa\.Request/.test(pluginSource));
-assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.48.0'));
+assert(loaderSource.includes('VibePlayer-Lampa-Plugin.js?v=0.49.0'));
 
 // A direct source call may never touch Lampa.Player.play. The JSON hook still has to compact
 // the object at the moment MODS serializes it for AndroidJS.
 const directJsonPayload = {
     url: 'https://media.example/json.m3u8',
     quality: Object.assign(
-        { '1080p': 'https://media.example/json.m3u8' },
+        {
+            '1080p': 'https://media.example/json.m3u8',
+            '@VIBESUB@English|en|application%2Fx-subrip|0': 'https://subs.example/already-serialized.srt'
+        },
         Object.fromEntries(Array.from({ length: 500 }, (_, index) => [
             'raw-' + index,
             'https://media.example/json/' + index + '-' + 'x'.repeat(1800) + '.m3u8'
@@ -196,6 +211,10 @@ const directJsonPayload = {
 const compactJson = context.window.JSON.parse(context.window.JSON.stringify(directJsonPayload));
 assert(compactJson.playlist && compactJson.playlist.length === 1);
 assert(compactJson.quality['raw-0'] === undefined);
+assert(
+    Object.keys(compactJson.quality).some((label) => label.startsWith('@VIBESUB@')),
+    'already-serialized subtitle labels must survive repeated compacting'
+);
 assert(JSON.stringify(compactJson).length < 700000);
 
 forwardedPayload = null;
@@ -249,6 +268,11 @@ const mirroredEntry = episode.playlist.find((item) => item.season === 1 && item.
 const mirroredLabels = Object.keys(mirroredEntry.quality).filter((l) => l.startsWith('@VIBE'));
 assert(mirroredLabels.length > 0, 'labels must be mirrored onto the launched playlist entry');
 assert.equal(mirroredEntry.quality['1080p'], 'https://media.example/s01e02-1080.m3u8');
+assert.equal(
+    Object.keys(mirroredEntry.quality).filter((label) => label.startsWith('@VIBESUB@')).length,
+    2,
+    'subtitle metadata must travel on the selected playlist entry'
+);
 
 // A large series must stay below Android's Binder transaction limit. The bridge forwards
 // only the current playlist item and one default URL per sibling episode.
@@ -339,12 +363,12 @@ assert.equal(diagnosticLabels.length, 1);
 assert(diagnosticLabels[0].length < 80, 'diagnostic labels must stay bounded');
 
 // The probe reports the capture structurally: matched, 1 playlist entry, 1 voiceover,
-// 10 top-level fields (including the current MODS `translate` collection). It must never
+// 11 top-level fields (including subtitles and the current MODS `translate` collection). It must never
 // carry anything resembling a URL.
 const probe = Object.keys(forwarded.quality)
     .find((label) => label.startsWith('@VIBEMETA@'))
     .split('|')[2];
-assert.match(probe, /^c1p1v1f10n0s0w0$/);
+assert.match(probe, /^c1p1v1f11n0s0w0$/);
 
 // The bridge must report itself installed, otherwise it is silently doing nothing.
 assert.equal(context.window.VibePlayerBridge.installed, true);
